@@ -1,0 +1,68 @@
+@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Fraunces:ital,wght@400;700;900&display=swap');
+
+@theme {
+  --font-sans: "Sora", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Fraunces", "Georgia", serif;
+  --color-navy: #07192e;
+  --color-orange-brand: #ff6b00;
+  --color-teal-brand: #00d4c8;
+  --color-bg-light: #f0f4fa;
+  --color-text-light: #1e293b;
+
+  --animate-vibrant: vibrant 10s infinite alternate linear;
+
+  @keyframes vibrant {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    33% { transform: translate(30px, -50px) scale(1.1); }
+    66% { transform: translate(-20px, 20px) scale(0.9); }
+  }
+}
+
+@layer components {
+  .glass {
+    @apply backdrop-blur-2xl border transition-all duration-500;
+  }
+  
+  .glass-dark {
+    @apply bg-white/10 border-white/20 shadow-[0_8px_32px_rgba(0,0,0,0.4)];
+  }
+  
+  .glass-light {
+    @apply bg-white/60 border-navy/5 shadow-[0_10px_40px_rgba(0,0,0,0.08)];
+  }
+
+  .vibrant-blob {
+    @apply absolute rounded-full mix-blend-multiply filter blur-[80px] opacity-70;
+    animation: vibrant 10s infinite alternate linear;
+  }
+}
+
+@layer utilities {
+}
+
+@layer base {
+  body {
+    @apply font-sans antialiased overflow-x-hidden;
+  }
+  
+  ::selection {
+    @apply bg-teal-brand/30 text-teal-brand;
+  }
+
+  /* Custom Scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-teal-brand/20 rounded-full hover:bg-teal-brand/40 transition-colors;
+  }
+}
+
+.title-font {
+  font-family: theme('fontFamily.serif');
+}
