@@ -39,7 +39,9 @@ import {
   Volume2,
   VolumeX,
   Book,
-  FileText
+  FileText,
+  ThumbsUp,
+  ThumbsDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { getAIAdvice, getAICounseling } from './lib/gemini';
@@ -78,6 +80,9 @@ interface Message {
   id: string;
   role: 'user' | 'model';
   content: string;
+  feedback?: 'positive' | 'negative' | null;
+  feedbackComment?: string;
+  detectedEmotion?: string;
 }
 
 const PSYCHOLOGISTS = [
@@ -134,6 +139,29 @@ const QUESTIONS = [
   }
 ];
 
+const Logo = ({ className, size = 40 }: { className?: string, size?: number }) => (
+  <div className={`relative flex items-center justify-center ${className}`} style={{ width: size, height: size }}>
+    <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full drop-shadow-lg">
+      <defs>
+        <linearGradient id="logo_grad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#00D4C8" />
+          <stop offset="100%" stopColor="#00A89F" />
+        </linearGradient>
+      </defs>
+      <rect width="100" height="100" rx="28" fill="url(#logo_grad)" />
+      {/* Brain Outline Simplified */}
+      <path d="M50 25C35 25 25 35 25 50C25 65 35 75 50 75C65 75 75 65 75 50C75 35 65 25 50 25Z" fill="white" fillOpacity="0.1" />
+      {/* Heart integrated inside */}
+      <path d="M50 42C50 42 47 38 42 38C37 38 34 42 34 47C34 55 50 65 50 65C50 65 66 55 66 47C66 42 63 38 58 38C53 38 50 42 50 42Z" fill="white" fillOpacity="0.3" />
+      {/* Neural nodes/dots */}
+      <circle cx="35" cy="40" r="2" fill="white" />
+      <circle cx="65" cy="40" r="2" fill="white" />
+      <circle cx="50" cy="50" r="3" fill="white" />
+      <path d="M35 40L50 50L65 40" stroke="white" strokeWidth="1" strokeOpacity="0.4" />
+    </svg>
+  </div>
+);
+
 export default function App() {
   const [lang, setLang] = useState<'az' | 'en'>('az');
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
@@ -162,9 +190,12 @@ export default function App() {
   const [inputText, setInputText] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [isAiVoiceEnabled, setIsAiVoiceEnabled] = useState(false);
+  const [isAiVoiceEnabled, setIsAiVoiceEnabled] = useState(() => localStorage.getItem('aidly_voice_enabled') === 'true');
+  const [emotionSensitivity, setEmotionSensitivity] = useState<'Low' | 'Medium' | 'High'>(() => (localStorage.getItem('aidly_emotion_sensitivity') as any) || 'Medium');
   const [activeAudioId, setActiveAudioId] = useState<string | null>(null);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const [feedbackingMsgId, setFeedbackingMsgId] = useState<string | null>(null);
+  const [tempFeedbackText, setTempFeedbackText] = useState("");
   
   const chatEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
@@ -230,23 +261,41 @@ export default function App() {
     // Stop any current speech
     window.speechSynthesis.cancel();
     
-    const utterance = new SpeechSynthesisUtterance(text);
-    const voices = window.speechSynthesis.getVoices();
-    
-    // Try to find a suitable voice
-    if (lang === 'az') {
-      const azVoice = voices.find(v => v.lang.includes('az') || v.name.toLowerCase().includes('azerbaijan'));
-      if (azVoice) utterance.voice = azVoice;
-      utterance.lang = 'az-AZ';
+    const startSpeak = () => {
+      const utterance = new SpeechSynthesisUtterance(text);
+      const voices = window.speechSynthesis.getVoices();
+      
+      // Try to find a suitable voice
+      if (lang === 'az') {
+        // Priority: 1. Native AZ, 2. Turkish (very similar phonetics), 3. Any voice
+        const azVoice = voices.find(v => v.lang.includes('az') || v.name.toLowerCase().includes('azerbaijan'));
+        const trVoice = voices.find(v => v.lang.includes('tr') || v.name.toLowerCase().includes('turkish'));
+        
+        if (azVoice) {
+          utterance.voice = azVoice;
+          utterance.lang = 'az-AZ';
+        } else if (trVoice) {
+          utterance.voice = trVoice;
+          utterance.lang = 'tr-TR'; // Better fallback than English
+        } else {
+          utterance.lang = 'az-AZ';
+        }
+      } else {
+        const enVoice = voices.find(v => v.lang.includes('en') && (v.name.includes('Google') || v.name.includes('Premium')));
+        if (enVoice) utterance.voice = enVoice;
+        utterance.lang = 'en-US';
+      }
+      
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      window.speechSynthesis.speak(utterance);
+    };
+
+    if (window.speechSynthesis.getVoices().length === 0) {
+      window.speechSynthesis.onvoiceschanged = startSpeak;
     } else {
-      const enVoice = voices.find(v => v.lang.includes('en') && (v.name.includes('Google') || v.name.includes('Premium')));
-      if (enVoice) utterance.voice = enVoice;
-      utterance.lang = 'en-US';
+      startSpeak();
     }
-    
-    utterance.rate = 1.0;
-    utterance.pitch = 1.0;
-    window.speechSynthesis.speak(utterance);
   };
 
   useEffect(() => {
@@ -418,24 +467,39 @@ export default function App() {
     if (!inputText.trim() || isTyping) return;
     
     const userMsg: Message = { id: `u-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, role: 'user', content: inputText };
+    const currentHistory = chatMessages.map(m => ({ role: m.role, content: m.content }));
     const newMessages = [...chatMessages, userMsg];
     setChatMessages(newMessages);
     setInputText("");
     setIsTyping(true);
 
     try {
-      const history = newMessages.map(m => ({ role: m.role, content: m.content }));
       const psych = PSYCHOLOGISTS.find(p => p.id === activeChatPsych);
       const specialty = lang === 'az' ? psych?.specialtyAz : psych?.specialtyEn;
       const psychName = lang === 'az' ? psych?.nameAz : psych?.nameEn;
-      const response = await getAICounseling(inputText, history, lang, specialty || "", psychName || "");
+      const response = await getAICounseling(inputText, currentHistory, lang, specialty || "", psychName || "", emotionSensitivity);
       
       setIsTyping(false);
-      const aiMsg: Message = { id: `ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, role: 'model', content: response.text };
+      
+      // Parse emotion tag: [EMOTION: value]
+      let cleanText = response.text;
+      let emotion = "";
+      const emotionMatch = response.text.match(/\[EMOTION:\s*([^\]]+)\]/);
+      if (emotionMatch) {
+        emotion = emotionMatch[1].trim().toLowerCase();
+        cleanText = response.text.replace(/\[EMOTION:\s*[^\]]+\]/, "").trim();
+      }
+
+      const aiMsg: Message = { 
+        id: `ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, 
+        role: 'model', 
+        content: cleanText,
+        detectedEmotion: emotion
+      };
       
       // Speak AI response if enabled
       if (isAiVoiceEnabled) {
-        speakText(response.text);
+        speakText(cleanText);
       }
 
       const finalMessages = [...newMessages, aiMsg];
@@ -447,6 +511,35 @@ export default function App() {
       console.error("Chat Error:", err);
       setIsTyping(false);
     }
+  };
+
+  const handleFeedback = (msgId: string, rating: 'positive' | 'negative' | null) => {
+    const updatedMessages = chatMessages.map(m => 
+      m.id === msgId ? { ...m, feedback: m.feedback === rating ? null : rating } : m
+    );
+    setChatMessages(updatedMessages);
+    if (activeChatPsych) {
+      saveChatHistory(activeChatPsych, updatedMessages);
+    }
+    
+    // Open comment box if negative or if user wants to add more
+    if (rating === 'negative') {
+      setFeedbackingMsgId(msgId);
+      const currentMsg = updatedMessages.find(m => m.id === msgId);
+      setTempFeedbackText(currentMsg?.feedbackComment || "");
+    }
+  };
+
+  const submitFeedbackComment = (msgId: string) => {
+    const updatedMessages = chatMessages.map(m => 
+      m.id === msgId ? { ...m, feedbackComment: tempFeedbackText } : m
+    );
+    setChatMessages(updatedMessages);
+    if (activeChatPsych) {
+      saveChatHistory(activeChatPsych, updatedMessages);
+    }
+    setFeedbackingMsgId(null);
+    setTempFeedbackText("");
   };
 
   const startChat = (id: string) => {
@@ -532,13 +625,13 @@ export default function App() {
 
   // Renderers
   const renderHome = () => (
-    <div className="p-5 space-y-8 h-full">
+    <div className="p-5 space-y-8">
       {/* App Header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-black tracking-tighter title-font">Aid<span className="text-orange-brand">ly</span></h1>
-        <div className="w-10 h-10 rounded-full bg-teal-brand flex items-center justify-center text-navy font-black shadow-lg shadow-teal-brand/20">
-          A
-        </div>
+        <h1 className="text-2xl font-black tracking-tighter title-font">
+          Aid<span className="text-orange-brand">ly</span>
+        </h1>
+        <Logo size={42} />
       </div>
 
       {/* Greeting */}
@@ -571,7 +664,7 @@ export default function App() {
       </div>
 
       {/* Grid Menu */}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 gap-4 pb-12">
         {[
           { icon: <ClipboardList size={22} />, label: t("Özünü qiymətləndir", "Self-assess"), color: "bg-orange-brand/10 text-orange-brand", onClick: () => setActiveTab('test') },
           { icon: <UserCheck size={22} />, label: t("Psixoloq tap", "Find psychologist"), color: "bg-teal-brand/10 text-teal-brand", onClick: () => setActiveTab('sessions') },
@@ -1217,6 +1310,50 @@ export default function App() {
         <div className="p-4 flex items-center justify-between border-t border-navy/5 dark:border-white/5">
           <div className="flex items-center gap-3">
             <div className={`w-8 h-8 rounded-full flex items-center justify-center glass shadow-inner ${theme === 'dark' ? 'bg-white/10' : 'bg-navy/5'}`}>
+              <Volume2 size={14} />
+            </div>
+            <span className="text-sm font-bold tracking-tight">{t("Aİ Səsli Cavab", "AI Voice Output")}</span>
+          </div>
+          <button 
+            onClick={() => {
+              const newState = !isAiVoiceEnabled;
+              setIsAiVoiceEnabled(newState);
+              localStorage.setItem('aidly_voice_enabled', String(newState));
+              if (!newState) window.speechSynthesis.cancel();
+            }}
+            className={`w-12 h-6 rounded-full relative transition-all duration-500 ${isAiVoiceEnabled ? 'bg-teal-brand shadow-[0_0_12px_rgba(0,212,200,0.4)]' : 'bg-navy/20'}`}
+          >
+            <motion.div 
+              className="w-4 h-4 bg-white rounded-full absolute top-1 shadow-lg"
+              animate={{ left: isAiVoiceEnabled ? 24 : 4 }}
+            />
+          </button>
+        </div>
+        <div className="p-4 flex items-center justify-between border-t border-navy/5 dark:border-white/5">
+          <div className="flex items-center gap-3">
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center glass shadow-inner ${theme === 'dark' ? 'bg-white/10' : 'bg-navy/5'}`}>
+              <Sparkles size={14} />
+            </div>
+            <span className="text-sm font-bold tracking-tight">{t("Emosiya Həssaslığı", "Emotion Sensitivity")}</span>
+          </div>
+          <div className="flex gap-1 p-1 rounded-xl glass glass-dark bg-white/5 border border-white/5 scale-90">
+            {['Low', 'Medium', 'High'].map((s) => (
+              <button 
+                key={s}
+                onClick={() => {
+                  setEmotionSensitivity(s as any);
+                  localStorage.setItem('aidly_emotion_sensitivity', s);
+                }}
+                className={`px-3 py-1.5 rounded-lg text-[9px] font-black transition-all ${emotionSensitivity === s ? 'bg-teal-brand text-navy shadow-lg' : 'opacity-40 hover:opacity-100'}`}
+              >
+                {t(s === 'Low' ? 'Aşağı' : s === 'Medium' ? 'Orta' : 'Yüksək', s)}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="p-4 flex items-center justify-between border-t border-navy/5 dark:border-white/5">
+          <div className="flex items-center gap-3">
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center glass shadow-inner ${theme === 'dark' ? 'bg-white/10' : 'bg-navy/5'}`}>
               <Home size={14} />
             </div>
             <span className="text-sm font-bold tracking-tight">{t("Dil", "Language")}</span>
@@ -1245,7 +1382,11 @@ export default function App() {
   );
 
   return (
-    <div className={`min-h-screen transition-colors duration-700 relative overflow-hidden ${theme === 'dark' ? 'bg-[#050B14] text-white' : 'bg-[#F8FAFF] text-text-light'}`}>
+    <div 
+      onContextMenu={(e) => e.preventDefault()}
+      onCopy={(e) => e.preventDefault()}
+      className={`min-h-screen transition-colors duration-700 relative overflow-hidden ${theme === 'dark' ? 'bg-[#050B14] text-white' : 'bg-[#F8FAFF] text-text-light'}`}
+    >
       {/* BACKGROUND BLOBS */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
         <div className="vibrant-blob top-[-10%] left-[-10%] w-[50vw] h-[50vw] bg-teal-brand opacity-20" style={{ animationDelay: '0s' }} />
@@ -1344,7 +1485,20 @@ export default function App() {
                 {/* Status Bar */}
                 <div className="absolute top-2.5 left-1/2 -translate-x-1/2 w-full px-8 text-[9px] font-black opacity-30 z-[70] flex items-center justify-between">
                   <span>9:41</span>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-2">
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const newState = !isAiVoiceEnabled;
+                        setIsAiVoiceEnabled(newState);
+                        localStorage.setItem('aidly_voice_enabled', String(newState));
+                        if (!newState) window.speechSynthesis.cancel();
+                      }}
+                      title={t("Səsli cavab", "Voice response")}
+                      className="pointer-events-auto hover:opacity-100 transition-opacity p-1"
+                    >
+                      {isAiVoiceEnabled ? <Volume2 size={10} className="text-teal-brand opacity-100" /> : <VolumeX size={10} />}
+                    </button>
                     <Wifi size={10} />
                     <Battery size={10} />
                   </div>
@@ -1360,14 +1514,14 @@ export default function App() {
                     className="h-full relative"
                   >
                     {/* Screen Content */}
-                    <div className="h-full w-full pt-16 pb-24 overflow-y-auto overflow-x-hidden scrollbar-hide">
+                    <div className="h-full w-full pt-16 pb-32 overflow-y-auto overflow-x-hidden scrollbar-hide">
                       <AnimatePresence mode="wait">
                         <motion.div
                           key={activeTab}
                           initial={{ opacity: 0, y: 10 }}
                           animate={{ opacity: 1, y: 0 }}
                           exit={{ opacity: 0, y: -10 }}
-                          className="h-full"
+                          className="min-h-full"
                         >
                           {activeTab === 'home' && renderHome()}
                           {activeTab === 'test' && renderTest()}
@@ -1381,11 +1535,11 @@ export default function App() {
                     </div>
 
                     {/* Bottom Nav */}
-                    <div className={`absolute bottom-0 left-0 right-0 h-24 pb-8 flex items-center justify-around px-4 glass z-30 ${theme === 'dark' ? 'glass-dark bg-[#0A0C10]/95 border-t border-white/5' : 'glass-light bg-white/95 shadow-[0_-10px_30px_rgba(0,0,0,0.05)]'}`}>
+                    <div className={`absolute bottom-0 left-0 right-0 h-24 pb-8 flex items-center justify-around px-2 glass z-30 ${theme === 'dark' ? 'glass-dark bg-[#0A0C10]/95 border-t border-white/5' : 'glass-light bg-white/95 shadow-[0_-10px_30px_rgba(0,0,0,0.05)]'}`}>
                       {[
                         { id: 'home', icon: Home, label: t("Ana Səhifə", "Home") },
-                        { id: 'test', icon: ClipboardList, label: t("Test", "Test") },
-                        { id: 'sessions', icon: Heart, label: t("Psixoloqlar", "Psychology") },
+                        { id: 'social_services', icon: Building, label: t("Xidmətlər", "Services") },
+                        { id: 'sessions', icon: Heart, label: t("Mütəxəssis", "Expert") },
                         { id: 'resources', icon: BookOpen, label: t("Resurslar", "Resources") },
                         { id: 'settings', icon: Settings, label: t("Profil", "Profile") },
                       ].map(item => (
@@ -1396,11 +1550,26 @@ export default function App() {
                           whileTap={{ scale: 0.9 }}
                           className={`flex flex-col items-center gap-1 transition-all ${activeTab === item.id ? 'text-teal-brand scale-110' : 'opacity-30'}`}
                         >
-                          <item.icon size={18} />
-                          <span className="text-[8px] font-black uppercase tracking-tighter">{item.label}</span>
+                          <item.icon size={16} />
+                          <span className="text-[7px] font-black uppercase tracking-tighter text-center">{item.label}</span>
                         </motion.button>
                       ))}
                     </div>
+
+                    {/* QUICK AI FAB */}
+                    {!isChatOpen && activeTab !== 'test' && (
+                      <motion.button
+                        initial={{ scale: 0, y: 50 }}
+                        animate={{ scale: 1, y: 0 }}
+                        whileHover={{ scale: 1.1, rotate: 5 }}
+                        whileTap={{ scale: 0.9 }}
+                        onClick={() => startChat(PSYCHOLOGISTS[0].id)}
+                        className="absolute bottom-28 right-6 w-14 h-14 rounded-full bg-gradient-to-tr from-teal-brand to-[#00A89F] text-navy flex items-center justify-center shadow-[0_10px_30px_rgba(0,212,200,0.4)] z-40"
+                      >
+                        <Sparkles size={24} className="animate-pulse" />
+                        <div className="absolute -top-1 -right-1 w-4 h-4 bg-orange-brand rounded-full border-2 border-white dark:border-[#0A0C10] animate-bounce" />
+                      </motion.button>
+                    )}
                   </motion.div>
                 ) : (
                   <motion.div 
@@ -1415,9 +1584,7 @@ export default function App() {
                     </div>
 
                     <div className="space-y-4 relative z-10">
-                      <div className="w-20 h-20 rounded-[32px] bg-teal-brand flex items-center justify-center mx-auto shadow-2xl shadow-teal-brand/40">
-                         <span className="text-4xl font-black text-navy leading-none">A</span>
-                      </div>
+                      <Logo size={80} className="mx-auto" />
                       <h2 className="text-3xl font-black tracking-tighter leading-tight">
                         Aid<span className="text-teal-brand">ly</span>
                       </h2>
@@ -1481,6 +1648,7 @@ export default function App() {
                               onClick={() => {
                                 const newState = !isAiVoiceEnabled;
                                 setIsAiVoiceEnabled(newState);
+                                localStorage.setItem('aidly_voice_enabled', String(newState));
                                 if (!newState) window.speechSynthesis.cancel();
                               }}
                               title={t("Səsli oxuma", "Text to speech")}
@@ -1508,7 +1676,7 @@ export default function App() {
                               key={m.id} 
                               initial={{ opacity: 0, scale: 0.95, y: 5 }}
                               animate={{ opacity: 1, scale: 1, y: 0 }}
-                              className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                              className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}
                             >
                               <div className={`max-w-[85%] p-3 rounded-2xl text-[11px] leading-relaxed glass ${
                                 m.role === 'user' 
@@ -1517,15 +1685,102 @@ export default function App() {
                               }`}>
                                 {m.content}
                               </div>
+
+                              {m.detectedEmotion && (
+                                <motion.div 
+                                  initial={{ opacity: 0, x: -10 }}
+                                  animate={{ opacity: 1, x: 0 }}
+                                  className={`mt-1 px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest flex items-center gap-1.5 border ${theme === 'dark' ? 'bg-white/5 border-white/10 text-white/40' : 'bg-navy/5 border-navy/5 text-navy/40'}`}
+                                >
+                                  <span className="text-xs">
+                                    {m.detectedEmotion.includes('kədər') || m.detectedEmotion.includes('sad') ? '😔' : 
+                                     m.detectedEmotion.includes('stress') ? '😰' : 
+                                     m.detectedEmotion.includes('xoşbəxt') || m.detectedEmotion.includes('happy') ? '😊' : 
+                                     m.detectedEmotion.includes('qorx') || m.detectedEmotion.includes('scar') ? '😨' : '😐'}
+                                  </span>
+                                  {lang === 'az' ? 'Duyğu:' : 'Emotion:'} {m.detectedEmotion}
+                                </motion.div>
+                              )}
+                              
+                              {m.role === 'model' && m.id !== 'start' && (
+                                <div className="mt-1.5 flex items-center gap-3 px-1">
+                                  <div className="flex items-center gap-1">
+                                    <button 
+                                      onClick={() => handleFeedback(m.id, 'positive')}
+                                      className={`p-1.5 rounded-lg transition-colors ${m.feedback === 'positive' ? 'text-teal-brand bg-teal-brand/10' : 'opacity-20 hover:opacity-50'}`}
+                                    >
+                                      <ThumbsUp size={12} fill={m.feedback === 'positive' ? "currentColor" : "none"} />
+                                    </button>
+                                    <button 
+                                      onClick={() => handleFeedback(m.id, 'negative')}
+                                      className={`p-1.5 rounded-lg transition-colors ${m.feedback === 'negative' ? 'text-red-400 bg-red-400/10' : 'opacity-20 hover:opacity-50'}`}
+                                    >
+                                      <ThumbsDown size={12} fill={m.feedback === 'negative' ? "currentColor" : "none"} />
+                                    </button>
+                                  </div>
+                                  
+                                  {m.feedback && (
+                                    <button 
+                                      onClick={() => {
+                                        setFeedbackingMsgId(m.id);
+                                        setTempFeedbackText(m.feedbackComment || "");
+                                      }}
+                                      className="text-[9px] font-black uppercase tracking-widest opacity-40 hover:opacity-100 hover:text-teal-brand transition-all"
+                                    >
+                                      {m.feedbackComment ? t("DÜZƏLİŞ ET", "EDIT FEEDBACK") : t("RƏY BİLDİR", "ADD COMMENT")}
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+
+                              {feedbackingMsgId === m.id && (
+                                <motion.div 
+                                  initial={{ opacity: 0, height: 0 }}
+                                  animate={{ opacity: 1, height: 'auto' }}
+                                  className="w-[85%] mt-2 space-y-2"
+                                >
+                                  <textarea 
+                                    autoFocus
+                                    value={tempFeedbackText}
+                                    onChange={(e) => setTempFeedbackText(e.target.value)}
+                                    placeholder={t("Nəyi təkmilləşdirə bilərik?", "How can we improve?")}
+                                    className={`w-full p-3 rounded-xl text-[10px] font-bold outline-none glass ${theme === 'dark' ? 'glass-dark bg-white/5 border-white/10 focus:border-teal-brand/30' : 'glass-light bg-navy/5 border-navy/5 focus:border-teal-brand/30'}`}
+                                    rows={2}
+                                  />
+                                  <div className="flex gap-2">
+                                    <button 
+                                      onClick={() => submitFeedbackComment(m.id)}
+                                      className="px-4 py-2 bg-teal-brand text-navy rounded-lg text-[9px] font-black uppercase tracking-widest shadow-lg shadow-teal-brand/20"
+                                    >
+                                      {t("GÖNDƏR", "SEND")}
+                                    </button>
+                                    <button 
+                                      onClick={() => setFeedbackingMsgId(null)}
+                                      className="px-4 py-2 opacity-40 text-[9px] font-black uppercase tracking-widest"
+                                    >
+                                      {t("LƏĞV ET", "CANCEL")}
+                                    </button>
+                                  </div>
+                                </motion.div>
+                              )}
+                              
+                              {m.feedbackComment && feedbackingMsgId !== m.id && (
+                                <div className={`mt-2 p-2 rounded-xl text-[9px] font-bold italic opacity-60 border-l-2 border-teal-brand/40 ml-1`}>
+                                  "{m.feedbackComment}"
+                                </div>
+                              )}
                             </motion.div>
                           ))}
                           {isTyping && (
-                            <div className="flex justify-start">
+                            <div className="flex justify-start items-center gap-2">
                               <div className={`p-3 rounded-2xl rounded-tl-none flex gap-1 glass ${theme === 'dark' ? 'glass-dark' : 'glass-light'}`}>
-                                <span className="w-1 h-1 bg-teal-brand rounded-full animate-bounce" />
-                                <span className="w-1 h-1 bg-teal-brand rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
-                                <span className="w-1 h-1 bg-teal-brand rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
+                                <span className="w-1.5 h-1.5 bg-teal-brand rounded-full animate-bounce" />
+                                <span className="w-1.5 h-1.5 bg-teal-brand rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+                                <span className="w-1.5 h-1.5 bg-teal-brand rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
                               </div>
+                              <span className="text-[9px] font-black uppercase tracking-[0.2em] opacity-30 animate-pulse">
+                                {t("AI düşünür...", "AI is thinking...")}
+                              </span>
                             </div>
                           )}
                           <div ref={chatEndRef} />

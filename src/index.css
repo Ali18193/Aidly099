@@ -43,11 +43,22 @@
 
 @layer base {
   body {
-    @apply font-sans antialiased overflow-x-hidden;
+    @apply font-sans antialiased overflow-x-hidden select-none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+  }
+
+  input, textarea {
+    -webkit-user-select: text;
+    -moz-user-select: text;
+    -ms-user-select: text;
+    user-select: text;
   }
   
   ::selection {
-    @apply bg-teal-brand/30 text-teal-brand;
+    background: transparent;
   }
 
   /* Custom Scrollbar */
