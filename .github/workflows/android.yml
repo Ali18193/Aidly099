@@ -25,17 +25,18 @@ jobs:
       - name: Build Web App
         run: npm run build
 
-      - name: Capacitor Sync
-        run: npx cap sync android
-
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Capacitor Sync & Platform Setup
+        run: |
+          npx cap sync android
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
 
       - name: Build Android APK
         run: |
@@ -46,5 +47,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug
+          name: Aidly-Debug-APK
           path: android/app/build/outputs/apk/debug/app-debug.apk
