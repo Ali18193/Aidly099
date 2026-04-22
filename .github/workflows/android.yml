@@ -33,10 +33,10 @@ jobs:
 
       - name: Capacitor Sync & Platform Setup
         run: |
+          # Köhnə və ya zədəli qovluq varsa silirik ki, CI mühiti onu təzə və sağlam yaratsın
+          rm -rf android
+          npx cap add android
           npx cap sync android
-          if [ ! -d "android" ]; then
-            npx cap add android
-          fi
 
       - name: Build Android APK
         run: |
