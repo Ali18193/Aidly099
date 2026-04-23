@@ -44,7 +44,7 @@ import {
   ThumbsDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { getAIAdvice, getAICounseling } from './lib/gemini';
+import { getAIAdvice, getAICounseling } from './lib/claude';
 import { LocalNotifications } from '@capacitor/local-notifications';
 
 // Types
