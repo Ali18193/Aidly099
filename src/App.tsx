@@ -164,6 +164,7 @@ const Logo = ({ className, size = 40 }: { className?: string, size?: number }) =
 );
 
 export default function App() {
+  // App Version: 1.0.1 (Trigger for fresh build)
   const [lang, setLang] = useState<'az' | 'en'>('az');
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [activeTab, setActiveTab] = useState<'home' | 'test' | 'results' | 'sessions' | 'settings' | 'social_services' | 'resources'>('home');

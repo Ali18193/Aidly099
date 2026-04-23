@@ -5,6 +5,7 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
+  workflow_dispatch: # Manual trigger üçün (GitHub saytından başlatmaq olar)
 
 jobs:
   build:
