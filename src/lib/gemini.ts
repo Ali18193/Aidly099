@@ -1,6 +1,11 @@
 import { GoogleGenAI } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+const getApiKey = () => {
+  return process.env.GEMINI_API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY || "";
+};
+
+const apiKey = getApiKey();
+const ai = new GoogleGenAI({ apiKey });
 
 function handleGeminiError(error: any, lang: 'az' | 'en'): string {
   const errMessage = error?.message?.toLowerCase() || "";
@@ -17,10 +22,10 @@ function handleGeminiError(error: any, lang: 'az' | 'en'): string {
       : "We've been talking a lot today! Give me a short break and try again in a few minutes.";
   }
   
-  if (errMessage.includes("api key") || errMessage.includes("401") || errMessage.includes("403")) {
+  if (errMessage.includes("api key") || errMessage.includes("401") || errMessage.includes("403") || !apiKey) {
     return lang === 'az'
-      ? "API açarı ilə bağlı problem var. Zəhmət olmasa tətbiq parametrlərini yoxlayın."
-      : "There's an issue with the API key. Please check the application settings.";
+      ? "AI üçün lazım olan API açarı tapılmadı və ya etibarsızdır. Zəhmət olmasa GitHub tənzimləmələrində GEMINI_API_KEY sirrini (secret) əlavə etdiyinizdən əmin olun."
+      : "Gemini API key is missing or invalid. Please ensure GEMINI_API_KEY is added to your GitHub Secrets and build process.";
   }
 
   if (errMessage.includes("fetch") || errMessage.includes("network") || errMessage.includes("offline")) {
@@ -35,7 +40,7 @@ function handleGeminiError(error: any, lang: 'az' | 'en'): string {
 }
 
 export async function getAIAdvice(score: number, lang: 'az' | 'en') {
-  if (!process.env.GEMINI_API_KEY) return lang === 'az' ? "Dəstək üçün minnətdarıq. Zəhmət olmasa API açarını yoxlayın." : "Thank you for your support. Please check the API key.";
+  if (!apiKey) return lang === 'az' ? "Dəstək üçün minnətdarıq. Zəhmət olmasa API açarını yoxlayın." : "Thank you for your support. Please check the API key.";
 
   try {
     const systemInstruction = lang === 'az'
@@ -69,7 +74,7 @@ export async function getAICounseling(
   name: string = "",
   sensitivity: 'Low' | 'Medium' | 'High' = 'Medium'
 ) {
-  if (!process.env.GEMINI_API_KEY) return { text: lang === 'az' ? "API açarı tapılmadı." : "API key not found." };
+  if (!apiKey) return { text: lang === 'az' ? "API açarı tapılmadı. GitHub-da GEMINI_API_KEY secretini əlavə edin." : "API key not found. Please add GEMINI_API_KEY to GitHub secrets." };
 
   try {
     const specialtyMsg = specialty ? (lang === 'az' ? `Sənin ixtisasın: ${specialty}. ` : `Your specialty is: ${specialty}. `) : "";

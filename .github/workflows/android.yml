@@ -24,6 +24,9 @@ jobs:
 
       - name: Build Web App
         run: npm run build
+        env:
+          # Web tətbiqi build olarkən API açarını daxil edirik ki, APK-da işləsin
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
       - name: Setup Java
         uses: actions/setup-java@v4

@@ -45,6 +45,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { getAIAdvice, getAICounseling } from './lib/gemini';
+import { LocalNotifications } from '@capacitor/local-notifications';
 
 // Types
 interface Session {
@@ -166,11 +167,12 @@ export default function App() {
   const [lang, setLang] = useState<'az' | 'en'>('az');
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [activeTab, setActiveTab] = useState<'home' | 'test' | 'results' | 'sessions' | 'settings' | 'social_services' | 'resources'>('home');
-  const [isAppOn, setIsAppOn] = useState(false);
+  const [isAppOn, setIsAppOn] = useState(true);
   const [showScore, setShowScore] = useState<number | null>(null);
   const [homeCategory, setHomeCategory] = useState<'ai' | 'real'>('ai');
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
   const [selectedPsychForBooking, setSelectedPsychForBooking] = useState<typeof REAL_PSYCHOLOGISTS[0] | null>(null);
+  const [selectedDateForBooking, setSelectedDateForBooking] = useState<Date>(new Date());
   
   // App States
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -301,6 +303,8 @@ export default function App() {
   useEffect(() => {
     // Load local data
     try {
+      LocalNotifications.requestPermissions();
+      
       const savedSessions = localStorage.getItem('aidly_sessions');
       const savedResults = localStorage.getItem('aidly_results');
       const savedTheme = localStorage.getItem('aidly_theme');
@@ -379,8 +383,11 @@ export default function App() {
     setActiveTab('sessions');
   };
 
-  const addBooking = (time: string) => {
+  const addBooking = async (time: string) => {
     if (!selectedPsychForBooking) return;
+    
+    const dateStr = selectedDateForBooking.toLocaleDateString(lang === 'az' ? 'az-AZ' : 'en-US', { day: 'numeric', month: 'long', year: 'numeric' });
+    
     const newBooking: Booking = {
       id: Date.now().toString(),
       psychId: selectedPsychForBooking.id,
@@ -390,13 +397,43 @@ export default function App() {
       specialtyEn: selectedPsychForBooking.specialtyEn,
       avatar: selectedPsychForBooking.avatar,
       time: time,
-      date: new Date().toLocaleDateString()
+      date: dateStr
     };
+
     setBookings(prev => {
       const newBookings = [newBooking, ...prev];
       localStorage.setItem('aidly_bookings', JSON.stringify(newBookings));
       return newBookings;
     });
+
+    // Schedule Reminder
+    try {
+      const [hours, minutes] = time.split(':').map(Number);
+      const reminderTime = new Date(selectedDateForBooking);
+      reminderTime.setHours(hours, minutes, 0, 0);
+      
+      // Schedule 30 minutes before
+      const scheduleDate = new Date(reminderTime.getTime() - 30 * 60 * 1000);
+      
+      if (scheduleDate > new Date()) {
+        await LocalNotifications.schedule({
+          notifications: [
+            {
+              title: lang === 'az' ? 'Görüş xatırlatması' : 'Appointment Reminder',
+              body: lang === 'az' 
+                ? `${selectedPsychForBooking.nameAz} ilə görüşünüz 30 dəqiqə sonra başlayır.` 
+                : `Your appointment with ${selectedPsychForBooking.nameEn} starts in 30 minutes.`,
+              id: Math.floor(Math.random() * 1000000),
+              schedule: { at: scheduleDate },
+              sound: 'default'
+            }
+          ]
+        });
+      }
+    } catch (err) {
+      console.warn("Notification error:", err);
+    }
+
     setIsBookingModalOpen(false);
     setSelectedPsychForBooking(null);
     setActiveTab('sessions');
@@ -598,6 +635,16 @@ export default function App() {
     saveChatHistory(psych.id, newHistory);
   };
 
+  const getNextDates = (count: number) => {
+    const dates = [];
+    for (let i = 0; i < count; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() + i);
+      dates.push(d);
+    }
+    return dates;
+  };
+
   const clearCurrentChat = () => {
     if (activeChatPsych) {
       const initialMsgs: Message[] = [
@@ -689,7 +736,7 @@ export default function App() {
   );
 
   const renderSocialServices = () => (
-    <div className="flex flex-col h-full bg-[#0D1117] text-[#E6EDF3] -mt-16 pt-16">
+    <div className="flex flex-col min-h-full bg-[#0D1117] text-[#E6EDF3]">
       {/* Page Header */}
       <div className="px-5 py-4 flex items-center gap-3 sticky top-0 bg-[#0D1117]/90 backdrop-blur-xl z-50 border-b border-white/5">
         <button 
@@ -967,7 +1014,7 @@ export default function App() {
   );
 
   const renderResources = () => (
-    <div className="flex flex-col min-h-full bg-[#0A0C10] text-[#E6EDF3] -mt-16 pt-16">
+    <div className="flex flex-col min-h-full bg-[#0A0C10] text-[#E6EDF3]">
       {/* Page Header */}
       <div className="px-5 py-4 flex items-center gap-3 sticky top-0 bg-[#0A0C10]/95 backdrop-blur-xl z-50 border-b border-white/5">
         <button 
@@ -1113,7 +1160,7 @@ export default function App() {
   );
 
   const renderSessions = () => (
-    <div className="flex flex-col min-h-full bg-[#0A0C10] text-[#E6EDF3] -mt-16 pt-16">
+    <div className="flex flex-col min-h-full bg-[#0A0C10] text-[#E6EDF3]">
       {/* Page Header */}
       <div className="px-5 py-4 flex items-center gap-3 sticky top-0 bg-[#0A0C10]/95 backdrop-blur-xl z-50 border-b border-white/5">
         <button 
@@ -1395,429 +1442,180 @@ export default function App() {
         <div className="vibrant-blob top-[10%] left-[30%] w-[30vw] h-[30vw] bg-[#00D4C8] opacity-10 blur-[150px]" style={{ animationDelay: '-1s' }} />
       </div>
 
-      <div className="relative z-10 min-h-screen flex flex-col">
-        {/* Landing Navbar */}
-        <nav className={`fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-6 py-4 glass ${theme === 'dark' ? 'glass-dark bg-navy/80 backdrop-blur-3xl' : 'glass-light bg-white/80 backdrop-blur-3xl'}`}>
-          <div className="flex items-center gap-2">
-            <span className="text-2xl font-black title-font tracking-tighter">
-              Aid<span className="text-orange-brand">ly</span>
-            </span>
-          </div>
-          <div className="flex gap-4">
-            <button onClick={toggleLang} className={`px-4 py-2 rounded-full text-xs font-black glass shadow-sm ${theme === 'dark' ? 'glass-dark' : 'glass-light'}`}>
-              {lang === 'az' ? 'AZ' : 'EN'}
-            </button>
-          </div>
-        </nav>
-
-        <main className="flex-1 pt-24 pb-12 px-6 flex flex-col lg:flex-row items-center justify-center gap-12 lg:gap-32 relative z-10 overflow-y-auto min-h-screen scrollbar-hide">
-          {/* Landing Copy */}
-          <div className="text-center lg:text-left space-y-8 max-w-xl lg:w-1/2">
-            <div className="space-y-4">
-              <motion.h1 
-                initial={{ opacity: 0, x: -30 }}
-                animate={{ opacity: 1, x: 0 }}
-                className="text-6xl md:text-9xl font-black title-font tracking-tighter"
-              >
-                Aid<span className="text-orange-brand">ly</span>
-              </motion.h1>
-              <motion.p 
-                 initial={{ opacity: 0 }}
-                 animate={{ opacity: 1 }}
-                 transition={{ delay: 0.2 }}
-                 className="text-2xl md:text-4xl font-bold opacity-60 tracking-tight leading-tight"
-              >
-                {t("Sənin AI Psixoloqun, hər an yanında.", "Your AI Psychologist, always with you.")}
-              </motion.p>
+      <div className="app-wrapper z-10">
+        <div className={`app-container ${theme === 'dark' ? 'bg-[#0A0C10]' : 'bg-[#F8FAFF]'}`}>
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="flex-1 flex flex-col relative overflow-hidden"
+          >
+            {/* Main Content Area */}
+            <div className="flex-1 overflow-y-auto overflow-x-hidden pb-32 scrollbar-hide">
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={activeTab}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  className="min-h-full"
+                >
+                  {activeTab === 'home' && renderHome()}
+                  {activeTab === 'test' && renderTest()}
+                  {activeTab === 'results' && renderResults()}
+                  {activeTab === 'sessions' && renderSessions()}
+                  {activeTab === 'settings' && renderSettings()}
+                  {activeTab === 'social_services' && renderSocialServices()}
+                  {activeTab === 'resources' && renderResources()}
+                </motion.div>
+              </AnimatePresence>
             </div>
-            <p className="text-lg opacity-40 font-medium max-w-md leading-relaxed">
-              {t("Daha yaxşı ruh halı üçün səmimi, anonim və sürətli dəstək. Aidly sizə özünüzü kəşf etməyə kömək edəcək.", 
-                 "Sincere, anonymous, and fast support for a better mindset. Aidly will help you discover yourself.")}
-            </p>
-            
-            <div className="hidden lg:flex flex-wrap gap-4 pt-6">
-              <div className="px-6 py-4 rounded-[28px] glass glass-dark bg-teal-brand/10 border border-teal-brand/20 flex items-center gap-4 transition-transform hover:scale-105">
-                <div className="w-10 h-10 rounded-full bg-teal-brand/20 flex items-center justify-center text-teal-brand">
-                   <MessageCircle size={20} />
-                </div>
-                <span className="text-[10px] font-black uppercase tracking-[0.2em]">{t("7/24 DƏSTƏK", "24/7 SUPPORT")}</span>
-              </div>
-              <div className="px-6 py-4 rounded-[28px] glass glass-dark bg-orange-brand/10 border border-orange-brand/20 flex items-center gap-4 transition-transform hover:scale-105">
-                <div className="w-10 h-10 rounded-full bg-orange-brand/20 flex items-center justify-center text-orange-brand">
-                   <UserCheck size={20} />
-                </div>
-                <span className="text-[10px] font-black uppercase tracking-[0.2em]">{t("TAM ANONİM", "FULLY ANONYMOUS")}</span>
-              </div>
+
+            {/* Bottom Nav */}
+            <div className={`absolute bottom-0 left-0 right-0 h-24 pb-8 flex items-center justify-around px-2 glass z-30 ${theme === 'dark' ? 'glass-dark bg-[#0A0C10]/95 border-t border-white/5' : 'glass-light bg-white/95 shadow-[0_-10px_30px_rgba(0,0,0,0.05)]'}`}>
+              {[
+                { id: 'home', icon: Home, label: t("Ana Səhifə", "Home") },
+                { id: 'social_services', icon: Building, label: t("Xidmətlər", "Services") },
+                { id: 'sessions', icon: Heart, label: t("Mütəxəssis", "Expert") },
+                { id: 'resources', icon: BookOpen, label: t("Resurslar", "Resources") },
+                { id: 'settings', icon: Settings, label: t("Profil", "Profile") },
+              ].map(item => (
+                <motion.button 
+                  key={item.id} 
+                  onClick={() => setActiveTab(item.id as any)}
+                  whileHover={{ y: -3 }}
+                  whileTap={{ scale: 0.9 }}
+                  className={`flex flex-col items-center gap-1 transition-all ${activeTab === item.id ? 'text-teal-brand scale-110' : 'opacity-30'}`}
+                >
+                  <item.icon size={16} />
+                  <span className="text-[7px] font-black uppercase tracking-tighter text-center">{item.label}</span>
+                </motion.button>
+              ))}
             </div>
-          </div>
 
-          {/* iPhone Mockup Container */}
-          <div className="relative group scale-[0.75] sm:scale-90 md:scale-95 lg:scale-100 transition-transform flex-shrink-0 lg:w-[360px]">
-            {/* Side Buttons - Left (Volume) */}
-            <div className="absolute top-32 -left-[2px] w-[3px] h-12 bg-white/20 rounded-r-sm z-0" />
-            <div className="absolute top-[180px] -left-[2px] w-[3px] h-12 bg-white/20 rounded-r-sm z-0" />
-            {/* Side Button - Right (Power) */}
-            <div className="absolute top-44 -right-[2px] w-[3px] h-20 bg-white/20 rounded-l-sm z-0" />
-
-            {/* Outer Glow */}
-            <div className="absolute -inset-10 bg-teal-brand/10 blur-[120px] rounded-[100px] opacity-50 group-hover:opacity-100 transition-opacity duration-1000" />
-            
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              className="w-[340px] h-[720px] bg-[#0A0C10] rounded-[60px] p-[10px] relative shadow-[0_50px_100px_-20px_rgba(0,0,0,0.9)] ring-1 ring-white/10"
-            >
-              {/* Screen Bezel / Border */}
-              <div className="absolute inset-0 rounded-[60px] border-[2px] border-white/5 pointer-events-none z-[70] shadow-2xl" />
-              
-              {/* Dynamic Island */}
-              <motion.div 
-                className="absolute top-6 left-1/2 -translate-x-1/2 w-28 h-7 bg-black rounded-full z-[80] flex items-center justify-center gap-2 border border-white/5 shadow-lg"
-                whileHover={{ width: 140, height: 32 }}
-                transition={{ type: "spring", stiffness: 300, damping: 20 }}
+            {/* QUICK AI FAB */}
+            {!isChatOpen && activeTab !== 'test' && (
+              <motion.button
+                initial={{ scale: 0, y: 50 }}
+                animate={{ scale: 1, y: 0 }}
+                whileHover={{ scale: 1.1, rotate: 5 }}
+                whileTap={{ scale: 0.9 }}
+                onClick={() => startChat(PSYCHOLOGISTS[0].id)}
+                className="absolute bottom-28 right-6 w-14 h-14 rounded-full bg-gradient-to-tr from-teal-brand to-[#00A89F] text-navy flex items-center justify-center shadow-[0_10px_30px_rgba(0,212,200,0.4)] z-40"
               >
-                <div className="w-2.5 h-2.5 bg-[#1C1F26] rounded-full border border-white/5" />
-                <div className="flex-1" />
-                <div className="w-1.5 h-1.5 bg-[#00D4C8] rounded-full animate-pulse opacity-40" />
-              </motion.div>
-              
-              <div className={`w-full h-full rounded-[50px] overflow-hidden relative shadow-inner ${theme === 'dark' ? 'bg-[#0A0C10] bg-gradient-to-b from-[#0A0C10] via-[#0D1117] to-[#0A0C10]' : 'bg-[#F8FAFF]'}`}>
-                {/* Status Bar */}
-                <div className="absolute top-2.5 left-1/2 -translate-x-1/2 w-full px-8 text-[9px] font-black opacity-30 z-[70] flex items-center justify-between">
-                  <span>9:41</span>
-                  <div className="flex items-center gap-2">
-                    <button 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const newState = !isAiVoiceEnabled;
-                        setIsAiVoiceEnabled(newState);
-                        localStorage.setItem('aidly_voice_enabled', String(newState));
-                        if (!newState) window.speechSynthesis.cancel();
-                      }}
-                      title={t("Səsli cavab", "Voice response")}
-                      className="pointer-events-auto hover:opacity-100 transition-opacity p-1"
-                    >
-                      {isAiVoiceEnabled ? <Volume2 size={10} className="text-teal-brand opacity-100" /> : <VolumeX size={10} />}
-                    </button>
-                    <Wifi size={10} />
-                    <Battery size={10} />
-                  </div>
-                </div>
+                <Sparkles size={24} className="animate-pulse" />
+                <div className="absolute -top-1 -right-1 w-4 h-4 bg-orange-brand rounded-full border-2 border-white dark:border-[#0A0C10] animate-bounce" />
+              </motion.button>
+            )}
 
-                <AnimatePresence mode="wait">
-                {isAppOn ? (
+            {/* MODALS & OVERLAYS */}
+            <AnimatePresence>
+              {isChatOpen && (
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="absolute inset-0 z-[100] flex items-end justify-center bg-black/60 backdrop-blur-md p-2"
+                >
                   <motion.div 
-                    key="app-content"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="h-full relative"
+                    initial={{ y: "100%" }}
+                    animate={{ y: 0 }}
+                    exit={{ y: "100%" }}
+                    transition={{ type: "spring", damping: 30, stiffness: 300 }}
+                    className={`w-full h-[95%] rounded-t-[40px] flex flex-col shadow-2xl relative glass ${theme === 'dark' ? 'glass-dark bg-navy/95 border-t border-white/20' : 'glass-light bg-white/95 border-t border-navy/10'}`}
                   >
-                    {/* Screen Content */}
-                    <div className="h-full w-full pt-16 pb-32 overflow-y-auto overflow-x-hidden scrollbar-hide">
-                      <AnimatePresence mode="wait">
+                    {/* Chat Header */}
+                    <div className="p-4 flex items-center justify-between border-b border-navy/5 dark:border-white/5">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-teal-brand/10 glass glass-dark flex items-center justify-center text-teal-brand">
+                          <MessageCircle size={18} />
+                        </div>
+                        <div>
+                          <h3 className="text-[10px] font-black uppercase tracking-widest">{t("AI Məsləhətçi", "AI Counselor")}</h3>
+                          <p className="text-[8px] opacity-50 flex items-center gap-1 font-black">
+                            <span className="w-1 h-1 bg-green-500 rounded-full animate-pulse" />
+                            {t("AI aktivdir", "AI is active")}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button 
+                          onClick={() => {
+                            setIsAiVoiceEnabled(!isAiVoiceEnabled);
+                            localStorage.setItem('aidly_voice_enabled', String(!isAiVoiceEnabled));
+                          }}
+                          className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${isAiVoiceEnabled ? 'bg-teal-brand text-navy' : 'bg-white/5'}`}
+                        >
+                          {isAiVoiceEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
+                        </button>
+                        <button 
+                          onClick={() => setIsChatOpen(false)}
+                          className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center hover:bg-white/10"
+                        >
+                          <X size={18} />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Chat Messages */}
+                    <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-hide">
+                      {chatMessages.map((msg) => (
                         <motion.div
-                          key={activeTab}
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: -10 }}
-                          className="min-h-full"
+                          key={msg.id}
+                          initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                          animate={{ opacity: 1, y: 0, scale: 1 }}
+                          className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                         >
-                          {activeTab === 'home' && renderHome()}
-                          {activeTab === 'test' && renderTest()}
-                          {activeTab === 'results' && renderResults()}
-                          {activeTab === 'sessions' && renderSessions()}
-                          {activeTab === 'settings' && renderSettings()}
-                          {activeTab === 'social_services' && renderSocialServices()}
-                          {activeTab === 'resources' && renderResources()}
+                          <div className={`max-w-[85%] p-4 rounded-3xl text-xs font-bold leading-relaxed ${
+                            msg.role === 'user' 
+                              ? 'bg-teal-brand text-navy rounded-tr-none' 
+                              : theme === 'dark' ? 'bg-white/5 text-white rounded-tl-none border border-white/5' : 'bg-navy/5 text-navy rounded-tl-none border border-navy/5'
+                          }`}>
+                            {msg.content}
+                            {msg.detectedEmotion && (
+                              <div className="mt-2 pt-2 border-t border-black/5 opacity-50 text-[8px] font-black uppercase tracking-widest">
+                                {t("Hiss olunan", "Detected")}: {msg.detectedEmotion}
+                              </div>
+                            )}
+                          </div>
                         </motion.div>
-                      </AnimatePresence>
-                    </div>
-
-                    {/* Bottom Nav */}
-                    <div className={`absolute bottom-0 left-0 right-0 h-24 pb-8 flex items-center justify-around px-2 glass z-30 ${theme === 'dark' ? 'glass-dark bg-[#0A0C10]/95 border-t border-white/5' : 'glass-light bg-white/95 shadow-[0_-10px_30px_rgba(0,0,0,0.05)]'}`}>
-                      {[
-                        { id: 'home', icon: Home, label: t("Ana Səhifə", "Home") },
-                        { id: 'social_services', icon: Building, label: t("Xidmətlər", "Services") },
-                        { id: 'sessions', icon: Heart, label: t("Mütəxəssis", "Expert") },
-                        { id: 'resources', icon: BookOpen, label: t("Resurslar", "Resources") },
-                        { id: 'settings', icon: Settings, label: t("Profil", "Profile") },
-                      ].map(item => (
-                        <motion.button 
-                          key={item.id} 
-                          onClick={() => setActiveTab(item.id as any)}
-                          whileHover={{ y: -3 }}
-                          whileTap={{ scale: 0.9 }}
-                          className={`flex flex-col items-center gap-1 transition-all ${activeTab === item.id ? 'text-teal-brand scale-110' : 'opacity-30'}`}
-                        >
-                          <item.icon size={16} />
-                          <span className="text-[7px] font-black uppercase tracking-tighter text-center">{item.label}</span>
-                        </motion.button>
                       ))}
-                    </div>
-
-                    {/* QUICK AI FAB */}
-                    {!isChatOpen && activeTab !== 'test' && (
-                      <motion.button
-                        initial={{ scale: 0, y: 50 }}
-                        animate={{ scale: 1, y: 0 }}
-                        whileHover={{ scale: 1.1, rotate: 5 }}
-                        whileTap={{ scale: 0.9 }}
-                        onClick={() => startChat(PSYCHOLOGISTS[0].id)}
-                        className="absolute bottom-28 right-6 w-14 h-14 rounded-full bg-gradient-to-tr from-teal-brand to-[#00A89F] text-navy flex items-center justify-center shadow-[0_10px_30px_rgba(0,212,200,0.4)] z-40"
-                      >
-                        <Sparkles size={24} className="animate-pulse" />
-                        <div className="absolute -top-1 -right-1 w-4 h-4 bg-orange-brand rounded-full border-2 border-white dark:border-[#0A0C10] animate-bounce" />
-                      </motion.button>
-                    )}
-                  </motion.div>
-                ) : (
-                  <motion.div 
-                    key="lock-screen"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0, y: -20 }}
-                    className="h-full flex flex-col items-center justify-center p-8 space-y-12 bg-gradient-to-br from-navy via-[#0A0C10] to-navy text-center relative overflow-hidden"
-                  >
-                    <div className="absolute inset-0 pointer-events-none">
-                      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-teal-brand/10 blur-[100px] rounded-full" />
-                    </div>
-
-                    <div className="space-y-4 relative z-10">
-                      <Logo size={80} className="mx-auto" />
-                      <h2 className="text-3xl font-black tracking-tighter leading-tight">
-                        Aid<span className="text-teal-brand">ly</span>
-                      </h2>
-                      <p className="text-xs font-black opacity-40 uppercase tracking-[0.3em]">
-                        {t("SİZİ GÖZLƏYİRİK", "WAITING FOR YOU")}
-                      </p>
-                    </div>
-
-                    <motion.button
-                      onClick={() => setIsAppOn(true)}
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      className="group relative px-10 py-4 bg-white text-navy rounded-3xl font-black text-sm uppercase tracking-widest shadow-2xl active:brightness-90 transition-all z-10"
-                    >
-                      {t("BAŞLA", "START")}
-                      <div className="absolute -inset-1 bg-white/20 blur-xl opacity-0 group-hover:opacity-100 transition-opacity rounded-3xl" />
-                    </motion.button>
-
-                    <p className="text-[9px] font-black opacity-20 absolute bottom-12 uppercase tracking-widest px-8">
-                       {t("Bütün məlumatlar anonim saxlanılır", "All data is kept anonymous")}
-                    </p>
-                  </motion.div>
-                )}
-                </AnimatePresence>
-                
-                {/* Home Indicator */}
-                <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 w-28 h-1 bg-white/20 rounded-full z-50 pointer-events-none" />
-
-                {/* AI CHAT SHEET - Fixed containment */}
-                <AnimatePresence>
-                  {isChatOpen && (
-                    <motion.div 
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      className="absolute inset-0 z-[100] flex items-end justify-center bg-black/60 backdrop-blur-md p-2"
-                    >
-                      <motion.div 
-                        initial={{ y: "100%" }}
-                        animate={{ y: 0 }}
-                        exit={{ y: "100%" }}
-                        transition={{ type: "spring", damping: 30, stiffness: 300 }}
-                        className={`w-full max-w-xl h-[92%] rounded-t-[40px] flex flex-col shadow-2xl relative glass ${theme === 'dark' ? 'glass-dark bg-navy/95 border-t border-white/20' : 'glass-light bg-white/95 border-t border-navy/10'}`}
-                      >
-                        {/* Header */}
-                        <div className="p-4 flex items-center justify-between border-b border-navy/5 dark:border-white/5">
-                          <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-full bg-teal-brand/10 glass glass-dark flex items-center justify-center text-teal-brand">
-                              <MessageCircle size={18} />
-                            </div>
-                            <div>
-                              <h3 className="text-[10px] font-black uppercase tracking-widest">{t("AI Məsləhətçi", "AI Counselor")}</h3>
-                              <p className="text-[8px] opacity-50 flex items-center gap-1 font-black">
-                                <span className="w-1 h-1 bg-green-500 rounded-full animate-pulse" />
-                                {t("AI aktivdir", "AI is active")}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button 
-                              onClick={() => {
-                                const newState = !isAiVoiceEnabled;
-                                setIsAiVoiceEnabled(newState);
-                                localStorage.setItem('aidly_voice_enabled', String(newState));
-                                if (!newState) window.speechSynthesis.cancel();
-                              }}
-                              title={t("Səsli oxuma", "Text to speech")}
-                              className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${isAiVoiceEnabled ? 'bg-teal-brand text-navy' : theme === 'dark' ? 'bg-white/5 text-white/50' : 'bg-navy/5 text-navy/50'}`}
-                            >
-                              {isAiVoiceEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
-                            </button>
-                            <button 
-                              onClick={clearCurrentChat} 
-                              title={t("Çatı təmizlə", "Clear chat")}
-                              className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${theme === 'dark' ? 'bg-white/5 text-white/50 hover:text-red-400 hover:bg-white/10' : 'bg-navy/5 text-navy/50 hover:text-red-500 hover:bg-navy/10'}`}
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                            <button onClick={() => setIsChatOpen(false)} className={`w-8 h-8 rounded-full flex items-center justify-center transition-all hover:rotate-90 ${theme === 'dark' ? 'bg-white/5 text-white/50 hover:text-white' : 'bg-navy/5 text-navy/50 hover:text-navy'}`}>
-                              <X size={16} />
-                            </button>
+                      {isTyping && (
+                        <div className="flex justify-start">
+                          <div className={`p-4 rounded-3xl ${theme === 'dark' ? 'bg-white/5' : 'bg-navy/5'} flex gap-1`}>
+                            <div className="w-1.5 h-1.5 bg-teal-brand rounded-full animate-bounce" style={{ animationDelay: '0s' }} />
+                            <div className="w-1.5 h-1.5 bg-teal-brand rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+                            <div className="w-1.5 h-1.5 bg-teal-brand rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
                           </div>
                         </div>
+                      )}
+                      <div ref={chatEndRef} />
+                    </div>
 
-                        {/* Messages */}
-                        <div className="flex-1 overflow-y-auto p-4 space-y-3 scroll-smooth scrollbar-hide relative">
-                          {chatMessages.map(m => (
-                            <motion.div 
-                              key={m.id} 
-                              initial={{ opacity: 0, scale: 0.95, y: 5 }}
-                              animate={{ opacity: 1, scale: 1, y: 0 }}
-                              className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}
-                            >
-                              <div className={`max-w-[85%] p-3 rounded-2xl text-[11px] leading-relaxed glass ${
-                                m.role === 'user' 
-                                  ? 'bg-orange-brand text-white rounded-tr-none shadow-lg shadow-orange-brand/20 font-black' 
-                                  : theme === 'dark' ? 'glass-dark bg-white/10 text-white/90 rounded-tl-none font-bold' : 'glass-light bg-navy/5 text-navy rounded-tl-none font-bold'
-                              }`}>
-                                {m.content}
-                              </div>
-
-                              {m.detectedEmotion && (
-                                <motion.div 
-                                  initial={{ opacity: 0, x: -10 }}
-                                  animate={{ opacity: 1, x: 0 }}
-                                  className={`mt-1 px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest flex items-center gap-1.5 border ${theme === 'dark' ? 'bg-white/5 border-white/10 text-white/40' : 'bg-navy/5 border-navy/5 text-navy/40'}`}
-                                >
-                                  <span className="text-xs">
-                                    {m.detectedEmotion.includes('kədər') || m.detectedEmotion.includes('sad') ? '😔' : 
-                                     m.detectedEmotion.includes('stress') ? '😰' : 
-                                     m.detectedEmotion.includes('xoşbəxt') || m.detectedEmotion.includes('happy') ? '😊' : 
-                                     m.detectedEmotion.includes('qorx') || m.detectedEmotion.includes('scar') ? '😨' : '😐'}
-                                  </span>
-                                  {lang === 'az' ? 'Duyğu:' : 'Emotion:'} {m.detectedEmotion}
-                                </motion.div>
-                              )}
-                              
-                              {m.role === 'model' && m.id !== 'start' && (
-                                <div className="mt-1.5 flex items-center gap-3 px-1">
-                                  <div className="flex items-center gap-1">
-                                    <button 
-                                      onClick={() => handleFeedback(m.id, 'positive')}
-                                      className={`p-1.5 rounded-lg transition-colors ${m.feedback === 'positive' ? 'text-teal-brand bg-teal-brand/10' : 'opacity-20 hover:opacity-50'}`}
-                                    >
-                                      <ThumbsUp size={12} fill={m.feedback === 'positive' ? "currentColor" : "none"} />
-                                    </button>
-                                    <button 
-                                      onClick={() => handleFeedback(m.id, 'negative')}
-                                      className={`p-1.5 rounded-lg transition-colors ${m.feedback === 'negative' ? 'text-red-400 bg-red-400/10' : 'opacity-20 hover:opacity-50'}`}
-                                    >
-                                      <ThumbsDown size={12} fill={m.feedback === 'negative' ? "currentColor" : "none"} />
-                                    </button>
-                                  </div>
-                                  
-                                  {m.feedback && (
-                                    <button 
-                                      onClick={() => {
-                                        setFeedbackingMsgId(m.id);
-                                        setTempFeedbackText(m.feedbackComment || "");
-                                      }}
-                                      className="text-[9px] font-black uppercase tracking-widest opacity-40 hover:opacity-100 hover:text-teal-brand transition-all"
-                                    >
-                                      {m.feedbackComment ? t("DÜZƏLİŞ ET", "EDIT FEEDBACK") : t("RƏY BİLDİR", "ADD COMMENT")}
-                                    </button>
-                                  )}
-                                </div>
-                              )}
-
-                              {feedbackingMsgId === m.id && (
-                                <motion.div 
-                                  initial={{ opacity: 0, height: 0 }}
-                                  animate={{ opacity: 1, height: 'auto' }}
-                                  className="w-[85%] mt-2 space-y-2"
-                                >
-                                  <textarea 
-                                    autoFocus
-                                    value={tempFeedbackText}
-                                    onChange={(e) => setTempFeedbackText(e.target.value)}
-                                    placeholder={t("Nəyi təkmilləşdirə bilərik?", "How can we improve?")}
-                                    className={`w-full p-3 rounded-xl text-[10px] font-bold outline-none glass ${theme === 'dark' ? 'glass-dark bg-white/5 border-white/10 focus:border-teal-brand/30' : 'glass-light bg-navy/5 border-navy/5 focus:border-teal-brand/30'}`}
-                                    rows={2}
-                                  />
-                                  <div className="flex gap-2">
-                                    <button 
-                                      onClick={() => submitFeedbackComment(m.id)}
-                                      className="px-4 py-2 bg-teal-brand text-navy rounded-lg text-[9px] font-black uppercase tracking-widest shadow-lg shadow-teal-brand/20"
-                                    >
-                                      {t("GÖNDƏR", "SEND")}
-                                    </button>
-                                    <button 
-                                      onClick={() => setFeedbackingMsgId(null)}
-                                      className="px-4 py-2 opacity-40 text-[9px] font-black uppercase tracking-widest"
-                                    >
-                                      {t("LƏĞV ET", "CANCEL")}
-                                    </button>
-                                  </div>
-                                </motion.div>
-                              )}
-                              
-                              {m.feedbackComment && feedbackingMsgId !== m.id && (
-                                <div className={`mt-2 p-2 rounded-xl text-[9px] font-bold italic opacity-60 border-l-2 border-teal-brand/40 ml-1`}>
-                                  "{m.feedbackComment}"
-                                </div>
-                              )}
-                            </motion.div>
-                          ))}
-                          {isTyping && (
-                            <div className="flex justify-start items-center gap-2">
-                              <div className={`p-3 rounded-2xl rounded-tl-none flex gap-1 glass ${theme === 'dark' ? 'glass-dark' : 'glass-light'}`}>
-                                <span className="w-1.5 h-1.5 bg-teal-brand rounded-full animate-bounce" />
-                                <span className="w-1.5 h-1.5 bg-teal-brand rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
-                                <span className="w-1.5 h-1.5 bg-teal-brand rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
-                              </div>
-                              <span className="text-[9px] font-black uppercase tracking-[0.2em] opacity-30 animate-pulse">
-                                {t("AI düşünür...", "AI is thinking...")}
-                              </span>
-                            </div>
-                          )}
-                          <div ref={chatEndRef} />
-                        </div>
-
-                        {/* Input */}
-                        <form onSubmit={handleSendMessage} className="p-4 border-t border-navy/5 dark:border-white/5 flex gap-2">
-                          <button 
-                            type="button"
-                            onClick={toggleListening}
-                            className={`w-12 h-12 rounded-xl flex items-center justify-center transition-all ${isListening ? 'bg-red-500 text-white animate-pulse shadow-lg shadow-red-500/20' : theme === 'dark' ? 'bg-white/5 text-white/40 hover:bg-white/10' : 'bg-navy/5 text-navy/40 hover:bg-navy/10'}`}
-                          >
-                            {isListening ? <MicOff size={18} /> : <Mic size={18} />}
-                          </button>
-                          <div className="relative flex-1">
-                            <input 
-                              type="text" 
-                              value={inputText}
-                              onChange={(e) => setInputText(e.target.value)}
-                              placeholder={t("Mesaj yazın...", "Type a message...")}
-                              className={`w-full py-3 pr-12 pl-4 rounded-xl text-xs font-bold outline-none glass ${theme === 'dark' ? 'glass-dark bg-white/5 focus:bg-white/10' : 'glass-light bg-navy/5 focus:bg-white border border-navy/5'}`}
-                            />
-                            <button 
-                              type="submit"
-                              disabled={!inputText.trim() || isTyping}
-                              className={`absolute right-1 top-1 w-10 h-10 rounded-lg flex items-center justify-center transition-all ${inputText.trim() ? 'bg-teal-brand text-navy shadow-lg shadow-teal-brand/20' : 'bg-white/5 text-white/20'}`}
-                            >
-                              <Send size={16} />
-                            </button>
-                          </div>
-                        </form>
+                    {/* Chat Input */}
+                    <form onSubmit={handleSendMessage} className="p-4 pb-8 border-t border-navy/5 dark:border-white/5">
+                      <div className="relative">
+                        <input 
+                          type="text" 
+                          value={inputText}
+                          onChange={(e) => setInputText(e.target.value)}
+                          placeholder={t("Mesaj yazın...", "Type a message...")}
+                          className={`w-full py-3 pr-12 pl-4 rounded-xl text-xs font-bold outline-none glass ${theme === 'dark' ? 'glass-dark bg-white/5 focus:bg-white/10' : 'glass-light bg-navy/5 focus:bg-white border border-navy/5'}`}
+                        />
+                        <button 
+                          type="submit"
+                          disabled={!inputText.trim() || isTyping}
+                          className={`absolute right-1 top-1 w-10 h-10 rounded-lg flex items-center justify-center transition-all ${inputText.trim() ? 'bg-teal-brand text-navy shadow-lg' : 'bg-white/5 text-white/20'}`}
+                        >
+                          <Send size={16} />
+                        </button>
+                      </div>
+                    </form>
                       </motion.div>
                     </motion.div>
                   )}
                 </AnimatePresence>
 
-                {/* BOOKING MODAL - Fixed containment */}
+                {/* BOOKING MODAL */}
                 <AnimatePresence>
                   {isBookingModalOpen && selectedPsychForBooking && (
                     <motion.div 
@@ -1833,33 +1631,60 @@ export default function App() {
                         className={`w-full max-w-sm rounded-[32px] p-6 space-y-6 glass ${theme === 'dark' ? 'glass-dark border border-white/10' : 'glass-light bg-white border border-navy/10'}`}
                       >
                         <div className="text-center space-y-2">
-                          <img src={selectedPsychForBooking.avatar} className="w-16 h-16 rounded-full mx-auto border-3 border-teal-brand/40 shadow-xl" referrerPolicy="no-referrer" />
+                          <img src={selectedPsychForBooking.avatar} className="w-16 h-16 rounded-full mx-auto border-2 border-teal-brand/40 shadow-xl" referrerPolicy="no-referrer" />
                           <div className="space-y-0.5">
                             <h2 className="text-sm font-black">{lang === 'az' ? selectedPsychForBooking.nameAz : selectedPsychForBooking.nameEn}</h2>
                             <p className="text-[9px] font-bold text-teal-brand uppercase tracking-widest">{lang === 'az' ? selectedPsychForBooking.specialtyAz : selectedPsychForBooking.specialtyEn}</p>
                           </div>
                         </div>
+                        <div className="space-y-4">
+                          <div className="space-y-3">
+                            <h3 className="text-[9px] font-black uppercase tracking-[0.2em] opacity-40 flex items-center gap-2">
+                              <Calendar size={10} />
+                              {t("GÜN SEÇİN", "SELECT DAY")}
+                            </h3>
+                            <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+                              {getNextDates(14).map((d, i) => {
+                                const isSelected = selectedDateForBooking.toDateString() === d.toDateString();
+                                return (
+                                  <motion.button
+                                    key={i}
+                                    whileTap={{ scale: 0.95 }}
+                                    onClick={() => setSelectedDateForBooking(d)}
+                                    className={`shrink-0 w-16 p-3 rounded-2xl flex flex-col items-center gap-1 transition-all border ${isSelected ? 'bg-teal-brand text-navy border-teal-brand shadow-lg scale-105' : 'bg-white/5 border-white/5 opacity-50 hover:opacity-100'}`}
+                                  >
+                                    <span className="text-[8px] font-black uppercase tracking-widest leading-none">
+                                      {d.toLocaleDateString(lang === 'az' ? 'az-AZ' : 'en-US', { weekday: 'short' })}
+                                    </span>
+                                    <span className="text-sm font-black leading-none">{d.getDate()}</span>
+                                    <span className="text-[7px] font-bold opacity-60 leading-none">
+                                      {d.toLocaleDateString(lang === 'az' ? 'az-AZ' : 'en-US', { month: 'short' })}
+                                    </span>
+                                  </motion.button>
+                                );
+                              })}
+                            </div>
+                          </div>
 
-                        <div className="space-y-3">
-                          <h3 className="text-[9px] font-black uppercase tracking-[0.2em] opacity-40 flex items-center gap-2">
-                            <Clock size={10} />
-                            {t("GÖRÜŞ SAATI SEÇİN", "SELECT APPOINTMENT TIME")}
-                          </h3>
-                          <div className="grid grid-cols-3 gap-2">
-                          {["10:00", "11:00", "12:00", "14:00", "15:00", "16:00", "18:00", "19:00", "20:00"].map(time => (
-                              <motion.button 
-                                key={time}
-                                onClick={() => addBooking(time)}
-                                whileHover={{ scale: 1.05, backgroundColor: "rgba(0, 212, 200, 1)", color: "#07192e" }}
-                                whileTap={{ scale: 0.95 }}
-                                className={`py-2 rounded-xl text-[10px] font-black transition-all glass ${theme === 'dark' ? 'glass-dark bg-white/5 border-none' : 'glass-light bg-navy/5 border-none'}`}
-                              >
-                                {time}
-                              </motion.button>
-                            ))}
+                          <div className="space-y-3">
+                            <h3 className="text-[9px] font-black uppercase tracking-[0.2em] opacity-40 flex items-center gap-2">
+                              <Clock size={10} />
+                              {t("GÖRÜŞ SAATI SEÇİN", "SELECT APPOINTMENT TIME")}
+                            </h3>
+                            <div className="grid grid-cols-3 gap-2">
+                              {["10:00", "11:00", "12:00", "14:00", "15:00", "16:00", "18:00", "19:00", "20:00"].map(time => (
+                                <motion.button 
+                                  key={time}
+                                  onClick={() => addBooking(time)}
+                                  whileTap={{ scale: 0.95 }}
+                                  className={`py-2 rounded-xl text-[10px] font-black transition-all glass ${theme === 'dark' ? 'glass-dark bg-white/5 border-none' : 'glass-light bg-navy/5 border-none hover:bg-teal-brand/10'}`}
+                                >
+                                  {time}
+                                </motion.button>
+                              ))}
+                            </div>
                           </div>
                         </div>
-
                         <button 
                           onClick={() => { setIsBookingModalOpen(false); setSelectedPsychForBooking(null); }}
                           className={`w-full py-2 text-[9px] font-black uppercase tracking-[0.3em] opacity-40 hover:opacity-100 transition-opacity`}
@@ -1870,10 +1695,11 @@ export default function App() {
                     </motion.div>
                   )}
                 </AnimatePresence>
-              </div>
-            </motion.div>
-          </div>
-        </main>
+              </motion.div>
+                
+          {/* Home Indicator Style Bar */}
+          <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 w-28 h-1 bg-white/10 rounded-full z-[120] pointer-events-none" />
+        </div>
       </div>
     </div>
   );
