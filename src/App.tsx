@@ -140,7 +140,7 @@ const ARTICLES = [
     titleEn: "5 rules for effective sleep routine",
     category: "Yuxu",
     time: "6",
-    img: "https://images.unsplash.com/photo-1511295742364-911917175771?auto=format&fit=crop&q=80&w=400",
+    img: "https://images.unsplash.com/photo-1541123603104-512919d6a96c?auto=format&fit=crop&q=80&w=400",
     contentAz: "1. Hər gün eyni saatda yat və qalx — bioloji saat tənzimlənir.\n\n2. Yatmazdan 1 saat əvvəl ekranları bağla — mavi işıq melatonini bloklayır.\n\n3. Yataq otağını soyuq saxla — 18-20°C ideal temperaturdu.\n\n4. Kofein öğleden sonra içmə — 6 saata qədər təsiri davam edir.\n\n5. Yatmazdan əvvəl 5 dəqiqə nəfəs məşqi et — bədən yuxuya hazırlanır.",
     contentEn: "1. Sleep and wake at the same time every day — regulates your biological clock.\n\n2. Turn off screens 1 hour before bed — blue light blocks melatonin.\n\n3. Keep bedroom cool — 18-20°C is ideal.\n\n4. Avoid caffeine after noon — effects last up to 6 hours.\n\n5. Do 5 minutes of breathing exercises before sleep — the body prepares for rest."
   },
@@ -1848,6 +1848,7 @@ export default function App() {
               src={article.img}
               alt={article.titleAz}
               className="w-full h-full object-cover"
+              referrerPolicy="no-referrer"
             />
             <div className="absolute inset-0 bg-gradient-to-t from-[#0D1117] via-[#0D1117]/30 to-transparent" />
             <div className="absolute bottom-4 left-5 right-5 flex items-center gap-3">
@@ -1998,6 +1999,7 @@ export default function App() {
               src="https://images.unsplash.com/photo-1544367567-0f2fcb009e0b?auto=format&fit=crop&q=80&w=800"
               alt="Featured"
               className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
+              referrerPolicy="no-referrer"
             />
             <div className="absolute inset-0 bg-gradient-to-t from-navy via-navy/20 to-transparent" />
             <div className="absolute bottom-6 left-6 right-6">
@@ -2036,6 +2038,7 @@ export default function App() {
                     src={article.img}
                     alt={article.titleAz}
                     className="w-full h-full object-cover group-hover:scale-110 transition-transform"
+                    referrerPolicy="no-referrer"
                   />
                   {readArticles.includes(article.id) && (
                     <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
