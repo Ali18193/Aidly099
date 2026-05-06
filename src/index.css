@@ -21,20 +21,20 @@
 
 @layer components {
   .glass {
-    @apply backdrop-blur-2xl border transition-all duration-500;
+    @apply backdrop-blur-lg border transition-all duration-300;
   }
   
   .glass-dark {
-    @apply bg-white/10 border-white/20 shadow-[0_8px_32px_rgba(0,0,0,0.4)];
+    @apply bg-white/5 border-white/10 shadow-lg;
   }
   
   .glass-light {
-    @apply bg-white/60 border-navy/5 shadow-[0_10px_40px_rgba(0,0,0,0.08)];
+    @apply bg-white/40 border-navy/5 shadow-md;
   }
 
   .vibrant-blob {
-    @apply absolute rounded-full mix-blend-multiply filter blur-[80px] opacity-70;
-    animation: vibrant 10s infinite alternate linear;
+    @apply absolute rounded-full filter blur-[60px] opacity-40;
+    animation: vibrant 15s infinite alternate linear;
   }
 }
 

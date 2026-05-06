@@ -5,7 +5,6 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
-  workflow_dispatch: # Manual trigger üçün (GitHub saytından başlatmaq olar)
 
 jobs:
   build:
@@ -26,8 +25,8 @@ jobs:
       - name: Build Web App
         run: npm run build
         env:
-          # Claude API açarını build zamanı daxil edirik
-          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          # Web tətbiqi build olarkən API açarını daxil edirik ki, APK-da işləsin
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
       - name: Setup Java
         uses: actions/setup-java@v4
