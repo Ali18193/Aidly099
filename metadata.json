@@ -1,6 +1,6 @@
 {
   "name": "Aidly",
   "description": "Psixoloji dəstək platforması - Anonim və pulsuz dəstək, testlər və AI konsultasiyası.",
-  "requestFramePermissions": ["microphone"],
+  "requestFramePermissions": ["microphone", "geolocation"],
   "majorCapabilities": []
 }

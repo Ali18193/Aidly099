@@ -308,6 +308,8 @@ export default function App() {
   const [isTyping, setIsTyping] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isAiVoiceEnabled, setIsAiVoiceEnabled] = useState(() => localStorage.getItem('aidly_voice_enabled') === 'true');
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isEmergencyModalOpen, setIsEmergencyModalOpen] = useState(false);
   const [emotionSensitivity, setEmotionSensitivity] = useState<'Low' | 'Medium' | 'High'>(() => (localStorage.getItem('aidly_emotion_sensitivity') as any) || 'Medium');
   const [activeAudioId, setActiveAudioId] = useState<string | null>(null);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
@@ -340,6 +342,19 @@ export default function App() {
     });
 
     return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const handleOnlineStatus = () => setIsOnline(true);
+    const handleOfflineStatus = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnlineStatus);
+    window.addEventListener('offline', handleOfflineStatus);
+
+    return () => {
+      window.removeEventListener('online', handleOnlineStatus);
+      window.removeEventListener('offline', handleOfflineStatus);
+    };
   }, []);
 
   useEffect(() => {
@@ -699,6 +714,67 @@ export default function App() {
     }
   };
 
+  const clearChatMessages = () => {
+    if (window.confirm(lang === 'az' ? "Söhbət tarixçəsini silmək istədiyinizə əminsiniz?" : "Are you sure you want to clear chat history?")) {
+      setChatMessages([]);
+      if (activeChatPsych) {
+        saveChatHistory(activeChatPsych, []);
+      }
+    }
+  };
+
+  const getDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    const R = 6371; // km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+      Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+  };
+
+  const findNearestDOSTCenter = () => {
+    if (!navigator.geolocation) {
+      alert(lang === 'az' ? "Geolokasiya bu brauzer tərəfindən dəstəklənmir." : "Geolocation is not supported by this browser.");
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition((position) => {
+      const userLat = position.coords.latitude;
+      const userLon = position.coords.longitude;
+
+      const DOST_CENTERS = [
+        { name: "DOST 1 (Yasamal)", lat: 40.3807, lon: 49.8055, query: "DOST+1+Yasamal" },
+        { name: "DOST 2 (Xəzər)", lat: 40.4851, lon: 50.1583, query: "DOST+2+Khazar" },
+        { name: "DOST 3 (Nizami)", lat: 40.4074, lon: 49.9298, query: "DOST+3+Nizami" },
+        { name: "DOST 4 (Binəqədi)", lat: 40.4357, lon: 49.8453, query: "DOST+4+Binagadi" },
+        { name: "DOST 5 (Xətai)", lat: 40.3797, lon: 49.9257, query: "DOST+5+Khatai" },
+        { name: "DOST 6 (Abşeron)", lat: 40.5891, lon: 49.6644, query: "DOST+6+Absheron" }
+      ];
+
+      let nearest = DOST_CENTERS[0];
+      let minDistance = getDistance(userLat, userLon, nearest.lat, nearest.lon);
+
+      DOST_CENTERS.forEach(center => {
+        const dist = getDistance(userLat, userLon, center.lat, center.lon);
+        if (dist < minDistance) {
+          minDistance = dist;
+          nearest = center;
+        }
+      });
+
+      alert(lang === 'az' 
+        ? `Sizə ən yaxın: ${nearest.name} (~${minDistance.toFixed(1)} km). Xəritə açılır...` 
+        : `Nearest to you: ${nearest.name} (~${minDistance.toFixed(1)} km). Opening map...`);
+      
+      window.open(`https://www.google.com/maps/search/${nearest.query}`, '_blank');
+    }, (err) => {
+      alert(lang === 'az' ? "Məkan məlumatı alınmadı. Zəhmət olmasa icazə verin." : "Could not get location. Please grant permission.");
+    });
+  };
+
   const handleTestAnswer = async (weight: number) => {
     const newAnswers = [...currentTestAnswers, weight];
     setCurrentTestAnswers(newAnswers);
@@ -734,6 +810,26 @@ export default function App() {
   const handleSendMessage = async (e?: FormEvent) => {
     if (e) e.preventDefault();
     if (!inputText.trim() || isTyping) return;
+
+    const lowerText = inputText.toLowerCase();
+
+    // Açar söz siyahıları
+    const TEHLIKELI_SOZLER = ["intihar", "ölmək istəyirəm", "yaşamaq istəmirəm", "həyatıma son", "özümü öldür"];
+    const KEDER_SOZLER = ["tənhayam", "heç kim sevmir", "ağlayıram", "dözə bilmirəm", "yoruldum", "sıxılıram"];
+    const STRESS_SOZLER = ["stress", "narahatam", "nigaran", "qorxuram", "pərt olmuşam"];
+
+    const oflaynCavab = (mesaj: string) => {
+      const msg = mesaj.toLowerCase();
+      if (TEHLIKELI_SOZLER.some(kw => msg.includes(kw))) return "Sən tək deyilsən. Dərhal kömək al: 195, 112";
+      if (KEDER_SOZLER.some(kw => msg.includes(kw))) return "Səni eşidirəm. Bu hisslər keçəcək. Yanındayam.";
+      if (STRESS_SOZLER.some(kw => msg.includes(kw))) return "Birlikdə 4 saniyə nəfəs al, 4 saxla, 4 burax. Bir daha cəhd edək.";
+      return "Hazırda internet bağlantısı yoxdur. Ətraflı dəstək üçün online olun. Təcili vəziyyətdə 112 zəng edin.";
+    };
+
+    // 1. Təcili vəziyyət sistemi (İnternet olsun-olmasın həmişə işləyir)
+    if (TEHLIKELI_SOZLER.some(keyword => lowerText.includes(keyword))) {
+      setIsEmergencyModalOpen(true);
+    }
     
     const userMsg: Message = { id: `u-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, role: 'user', content: inputText };
     const currentHistory = chatMessages.map(m => ({ role: m.role, content: m.content }));
@@ -743,6 +839,26 @@ export default function App() {
     const sentText = inputText;
     setInputText("");
     setIsTyping(true);
+
+    // 2. Oflayn rejim funksionallığı
+    if (!isOnline) {
+      setTimeout(() => {
+        const offlineResponse = oflaynCavab(sentText);
+
+        const modelMsg: Message = { 
+          id: `m-${Date.now()}`, 
+          role: 'model', 
+          content: offlineResponse 
+        };
+        const updatedMessages = [...newMessagesPostUser, modelMsg];
+        setChatMessages(updatedMessages);
+        setIsTyping(false);
+        if (activeChatPsych) {
+          saveChatHistory(activeChatPsych, updatedMessages);
+        }
+      }, 1000);
+      return;
+    }
 
     try {
       const psych = PSYCHOLOGISTS.find(p => p.id === activeChatPsych);
@@ -1466,7 +1582,7 @@ export default function App() {
 
             <div className="flex gap-2">
               <button
-                onClick={() => openMap('DOST+Merkezi+Baku')}
+                onClick={findNearestDOSTCenter}
                 className="flex-1 py-3.5 rounded-2xl bg-teal-brand text-navy font-black text-xs shadow-lg shadow-teal-brand/20 active:scale-95 transition-transform flex items-center justify-center gap-2"
               >
                 <MapPin size={14} />
@@ -2472,6 +2588,22 @@ export default function App() {
 
       <div className="app-wrapper z-10">
         <div className={`app-container ${theme === 'dark' ? 'bg-[#0A0C10]' : 'bg-[#F8FAFF]'}`}>
+          
+          {/* Offline Banner */}
+          <AnimatePresence>
+            {!isOnline && (
+              <motion.div 
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="bg-rose-500 text-white text-[10px] font-black uppercase tracking-[0.2em] py-2 px-4 flex items-center justify-center gap-2 z-[130] shrink-0"
+              >
+                <AlertCircle size={12} />
+                Oflayn rejimdəsiniz
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           <motion.div 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -2582,6 +2714,13 @@ export default function App() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
+                        <button 
+                          onClick={clearChatMessages}
+                          className="w-8 h-8 rounded-full flex items-center justify-center bg-red-500/10 text-red-500 hover:bg-red-500/20"
+                          title={t("Tarixçəni təmizlə", "Clear History")}
+                        >
+                          <Trash2 size={14} />
+                        </button>
                         <button 
                           onClick={() => {
                             setIsAiVoiceEnabled(!isAiVoiceEnabled);
@@ -2746,6 +2885,70 @@ export default function App() {
                     </motion.div>
                   )}
                 </AnimatePresence>
+
+                {/* Emergency Modal */}
+                <AnimatePresence>
+                  {isEmergencyModalOpen && (
+                    <motion.div 
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="absolute inset-0 z-[150] flex items-center justify-center p-6 bg-red-600"
+                    >
+                      <div className="w-full space-y-8 text-white text-center">
+                        <motion.div 
+                          initial={{ scale: 0.5, opacity: 0 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          className="flex flex-col items-center gap-4"
+                        >
+                          <div className="w-20 h-20 rounded-full bg-white flex items-center justify-center shadow-2xl shadow-white/20">
+                            <AlertCircle size={40} className="text-red-600" />
+                          </div>
+                          <h2 className="text-3xl font-black">{t("SƏN TƏK DEYİLSƏN", "YOU ARE NOT ALONE")}</h2>
+                          <p className="text-sm font-bold opacity-90 max-w-xs">{t("Hər bir çətinliyin həlli var. Bizimlə əlaqə saxla, sənə kömək edək.", "Every difficulty has a solution. Contact us, let us help you.")}</p>
+                        </motion.div>
+
+                        <div className="grid grid-cols-1 gap-3">
+                          {[
+                            { label: "Psixoloji yardım (195)", phone: "195" },
+                            { label: "Təcili yardım (112)", phone: "112" },
+                            { label: "Polis (102)", phone: "102" },
+                            { label: "Təcili tibbi yardım (103)", phone: "103" }
+                          ].map((item, idx) => (
+                            <motion.a
+                              key={idx}
+                              href={`tel:${item.phone}`}
+                              initial={{ x: -20, opacity: 0 }}
+                              animate={{ x: 0, opacity: 1 }}
+                              transition={{ delay: idx * 0.1 }}
+                              className="w-full bg-white text-red-600 py-4 rounded-2xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-3 active:scale-95 transition-transform"
+                            >
+                              <Phone size={16} />
+                              {item.label}
+                            </motion.a>
+                          ))}
+                        </div>
+
+                        <div className="space-y-4">
+                          <motion.button
+                            whileTap={{ scale: 0.95 }}
+                            className="w-full bg-white/20 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest"
+                          >
+                            {t("Yaxın birinə zəng et", "Call a loved one")}
+                          </motion.button>
+                          
+                          <button 
+                            onClick={() => setIsEmergencyModalOpen(false)}
+                            className="text-[10px] font-black uppercase tracking-[0.4em] opacity-60"
+                          >
+                            {t("GERİ QAYIT", "GO BACK")}
+                          </button>
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
               </motion.div>
                 
           {/* Home Indicator Style Bar */}
