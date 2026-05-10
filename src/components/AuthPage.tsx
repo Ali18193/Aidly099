@@ -12,6 +12,7 @@ interface AuthPageProps {
   userEmail: string | null;
   onResendVerification: () => void;
   onSignOut: () => void;
+  onAnonymousSignIn: () => void;
 }
 
 export const AuthPage: React.FC<AuthPageProps> = ({ 
@@ -23,7 +24,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({
   isEmailVerified,
   userEmail,
   onResendVerification,
-  onSignOut
+  onSignOut,
+  onAnonymousSignIn
 }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [email, setEmail] = useState('');
@@ -177,6 +179,14 @@ export const AuthPage: React.FC<AuthPageProps> = ({
             )}
           </motion.button>
         </form>
+
+        <button 
+          onClick={onAnonymousSignIn}
+          className="text-[10px] font-bold opacity-60 hover:opacity-100 transition-opacity flex items-center justify-center gap-2 w-full py-2"
+        >
+          <User size={14} />
+          {t("Anonim olaraq davam et", "Continue as anonymous")}
+        </button>
 
         <div className="flex flex-col items-center gap-4">
           {authMode === 'login' ? (

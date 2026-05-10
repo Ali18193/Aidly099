@@ -82,7 +82,7 @@ export async function getAICounselingStream(
   }
 
   try {
-    const specialtyMsg = specialty ? `${specialty}. ` : "";
+    const specialtyMsg = specialty ? `Specialty: ${specialty}. ` : "";
     const nameMsg = name ? `User's name: ${name}. ` : "";
     
     const systemInstruction = `You are Aidly, a compassionate AI mental wellness assistant designed for Azerbaijani users.
@@ -157,7 +157,7 @@ export async function getAICounseling(
   if (!apiKey) return { text: lang === 'az' ? "API açarı tapılmadı." : "API key not found." };
 
   try {
-    const specialtyMsg = specialty ? `${specialty}. ` : "";
+    const specialtyMsg = specialty ? `Specialty: ${specialty}. ` : "";
     const nameMsg = name ? `User's name: ${name}. ` : "";
     
     const systemInstruction = `You are Aidly, a compassionate AI mental wellness assistant designed for Azerbaijani users.

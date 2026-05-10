@@ -35,6 +35,7 @@ import {
   ExternalLink,
   Globe,
   AlertCircle,
+  AlertTriangle,
   Info,
   BookOpen,
   Play,
@@ -47,7 +48,8 @@ import {
   ThumbsDown,
   Bookmark,
   CheckCircle,
-  Video
+  Video,
+  ShieldAlert
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { getAIAdvice, getAICounseling, getAICounselingStream } from './lib/gemini';
@@ -62,7 +64,8 @@ import {
   sendEmailVerification,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
-  sendPasswordResetEmail
+  sendPasswordResetEmail,
+  signInAnonymously
 } from 'firebase/auth';
 
 // Types
@@ -104,10 +107,27 @@ interface Message {
   detectedEmotion?: string;
 }
 
+interface PastChatSession {
+  id: string;
+  psychId: string;
+  psychNameAz: string;
+  psychNameEn: string;
+  avatar: string;
+  date: string;
+  time: string;
+  messages: Message[];
+}
+
 const PSYCHOLOGISTS = [
   { id: '2', nameAz: 'Dr. Samir Qasımov', nameEn: 'Dr. Samir Gasimov', specialtyAz: 'Təşviş və Stress', specialtyEn: 'Anxiety and Stress', avatar: 'https://picsum.photos/seed/samir/100/100', rating: "4.9", chatCount: "2.3k" },
   { id: '3', nameAz: 'Dr. Günel Sadıqova', nameEn: 'Dr. Gunel Sadiqova', specialtyAz: 'Uşaq Psixoloqu', specialtyEn: 'Child Psychologist', avatar: 'https://picsum.photos/seed/gunel/100/100', rating: "4.8", chatCount: "1.9k" },
   { id: '4', nameAz: 'Aydan (Tələbə Dostu)', nameEn: 'Aydan (Student Buddy)', specialtyAz: 'Tələbə və məktəblilər üçün', specialtyEn: 'For Students and Pupils', avatar: 'https://picsum.photos/seed/student/100/100', rating: "4.9", chatCount: "3.1k" },
+];
+
+const EMERGENCY_SERVICES = [
+  { id: '1', phone: '988', nameAz: 'Milli Psixi Sağlamlıq Mərkəzi', nameEn: 'National Mental Health Center', descAz: 'Böhran və intihar riski', descEn: 'Crisis and suicide risk' },
+  { id: '2', phone: '146-3', nameAz: 'Təhsil Nazirliyi', nameEn: 'Ministry of Education', descAz: 'Psixoloji dəstək', descEn: 'Psychological support' },
+  { id: '3', phone: '(012) 510-66-36', nameAz: 'Psixoloji Dəstək Xətti', nameEn: 'Psychological Support Line', descAz: '24/7 anonim dəstək', descEn: '24/7 anonymous support' },
 ];
 
 const REAL_PSYCHOLOGISTS = [
@@ -281,7 +301,7 @@ export default function App() {
   
   const [lang, setLang] = useState<'az' | 'en'>('az');
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-  const [activeTab, setActiveTab] = useState<'home' | 'test' | 'results' | 'sessions' | 'settings' | 'social_services' | 'resources' | 'feedback'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'test' | 'results' | 'sessions' | 'settings' | 'social_services' | 'resources' | 'feedback' | 'past_chats'>('home');
   const [isAppOn, setIsAppOn] = useState(true);
   const [showScore, setShowScore] = useState<number | null>(null);
   const [homeCategory, setHomeCategory] = useState<'ai' | 'real'>('ai');
@@ -304,6 +324,7 @@ export default function App() {
   const [activeChatPsych, setActiveChatPsych] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<Message[]>([]);
   const [allChats, setAllChats] = useState<Record<string, Message[]>>({});
+  const [pastChats, setPastChats] = useState<PastChatSession[]>([]);
   const [inputText, setInputText] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [isListening, setIsListening] = useState(false);
@@ -336,6 +357,7 @@ export default function App() {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      console.log("Auth State Changed", currentUser);
       setUser(currentUser);
       setIsEmailVerified(currentUser?.emailVerified || false);
       setAuthLoading(false);
@@ -378,6 +400,16 @@ export default function App() {
       if (interval) clearInterval(interval);
     };
   }, [user, isEmailVerified]);
+
+  const handleAnonymousSignIn = async () => {
+    setAuthError(null);
+    try {
+      await signInAnonymously(auth);
+    } catch (err: any) {
+      console.error("Anonymous sign in error:", err);
+      setAuthError(err.message);
+    }
+  };
 
   const handleSignOut = async () => {
     try {
@@ -548,12 +580,14 @@ export default function App() {
       const savedResults = localStorage.getItem('aidly_results');
       const savedTheme = localStorage.getItem('aidly_theme');
       const savedChats = localStorage.getItem('aidly_chats');
+      const savedPastChats = localStorage.getItem('aidly_pastChats');
       const savedBookings = localStorage.getItem('aidly_bookings');
       
       if (savedSessions) setSessions(JSON.parse(savedSessions));
       if (savedResults) setTestResults(JSON.parse(savedResults));
       if (savedTheme) setTheme(savedTheme as 'dark' | 'light');
       if (savedChats) setAllChats(JSON.parse(savedChats));
+      if (savedPastChats) setPastChats(JSON.parse(savedPastChats));
       if (savedBookings) setBookings(JSON.parse(savedBookings));
     } catch (e) {
       console.warn("Failed to load local data:", e);
@@ -709,8 +743,7 @@ export default function App() {
     });
     
     if (activeChatPsych === id) {
-      setIsChatOpen(false);
-      setActiveChatPsych(null);
+      handleCloseChat();
     }
   };
 
@@ -814,13 +847,13 @@ export default function App() {
     const lowerText = inputText.toLowerCase();
 
     // Açar söz siyahıları
-    const TEHLIKELI_SOZLER = ["intihar", "ölmək istəyirəm", "yaşamaq istəmirəm", "həyatıma son", "özümü öldür"];
+    const TEHLIKELI_SOZLER = ["intihar", "ölmək istəyirəm", "yaşamaq istəmirəm", "həyatıma son", "özümü öldür", "həyatıma son qoymaq", "özümü məhv edəcəm", "özümü öldürəcəm", "özümü öldürmək", "ölmək istəyirəm"];
     const KEDER_SOZLER = ["tənhayam", "heç kim sevmir", "ağlayıram", "dözə bilmirəm", "yoruldum", "sıxılıram"];
     const STRESS_SOZLER = ["stress", "narahatam", "nigaran", "qorxuram", "pərt olmuşam"];
 
     const oflaynCavab = (mesaj: string) => {
       const msg = mesaj.toLowerCase();
-      if (TEHLIKELI_SOZLER.some(kw => msg.includes(kw))) return "Sən tək deyilsən. Dərhal kömək al: 195, 112";
+      if (TEHLIKELI_SOZLER.some(kw => msg.includes(kw))) return "Sən tək deyilsən. Dərhal kömək al: 988 (Böhran və intihar riski), 012 510-66-36 (Psixiatriya yardımı), 103 (Təcili yardım).";
       if (KEDER_SOZLER.some(kw => msg.includes(kw))) return "Səni eşidirəm. Bu hisslər keçəcək. Yanındayam.";
       if (STRESS_SOZLER.some(kw => msg.includes(kw))) return "Birlikdə 4 saniyə nəfəs al, 4 saxla, 4 burax. Bir daha cəhd edək.";
       return "Hazırda internet bağlantısı yoxdur. Ətraflı dəstək üçün online olun. Təcili vəziyyətdə 112 zəng edin.";
@@ -829,6 +862,8 @@ export default function App() {
     // 1. Təcili vəziyyət sistemi (İnternet olsun-olmasın həmişə işləyir)
     if (TEHLIKELI_SOZLER.some(keyword => lowerText.includes(keyword))) {
       setIsEmergencyModalOpen(true);
+    } else {
+      setIsEmergencyModalOpen(false);
     }
     
     const userMsg: Message = { id: `u-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, role: 'user', content: inputText };
@@ -975,6 +1010,39 @@ export default function App() {
     }
   };
 
+  const handleCloseChat = () => {
+    setIsChatOpen(false);
+    if (activeChatPsych && chatMessages.length > 1) { // Save only if there's actual discussion
+      const psych = PSYCHOLOGISTS.find(p => p.id === activeChatPsych);
+      if (psych) {
+        const newPastChat: PastChatSession = {
+          id: `past-${Date.now()}`,
+          psychId: psych.id,
+          psychNameAz: psych.nameAz,
+          psychNameEn: psych.nameEn,
+          avatar: psych.avatar,
+          date: new Date().toLocaleDateString(),
+          time: new Date().toLocaleTimeString(),
+          messages: [...chatMessages]
+        };
+        setPastChats(prev => {
+          const updated = [newPastChat, ...prev];
+          localStorage.setItem('aidly_pastChats', JSON.stringify(updated));
+          return updated;
+        });
+      }
+    }
+    // Clear current chat
+    const initialMsgs: Message[] = [
+      { id: `sys-${Date.now()}`, role: 'model', content: lang === 'az' ? "Salam! Mən sizin AI məsləhətçinizəm. Bu gün sizə necə kömək edə bilərəm?" : "Hi! I am your AI counselor. How can I help you today?" }
+    ];
+    setChatMessages(initialMsgs);
+    if (activeChatPsych) {
+       saveChatHistory(activeChatPsych, initialMsgs);
+    }
+    setActiveChatPsych(null);
+  };
+
   const handleMoodClick = (mood: string) => {
     setSelectedMood(mood);
     const psychId = activeChatPsych || (sessions.length > 0 ? sessions[0].id : PSYCHOLOGISTS[0].id);
@@ -1051,6 +1119,9 @@ export default function App() {
 
   const t = (az: string, en: string) => lang === 'az' ? az : en;
 
+  const isAnonymousUser = user?.isAnonymous;
+  const isVerifiedUser = user && !user.isAnonymous && isEmailVerified;
+  
   if (authLoading) {
     return (
       <div className="min-h-screen bg-navy flex items-center justify-center">
@@ -1059,7 +1130,7 @@ export default function App() {
     );
   }
 
-  if (!user || !isEmailVerified) {
+  if (!user || (!isVerifiedUser && !isAnonymousUser)) {
     return (
       <AuthPage 
         authMode={authMode}
@@ -1071,6 +1142,7 @@ export default function App() {
         userEmail={user?.email || null}
         onResendVerification={handleResendVerification}
         onSignOut={handleSignOut}
+        onAnonymousSignIn={handleAnonymousSignIn}
       />
     );
   }
@@ -1404,7 +1476,7 @@ export default function App() {
     };
 
     return (
-      <div className="flex flex-col min-h-full bg-[#0D1117] text-[#E6EDF3]">
+      <div className="flex flex-col min-h-full">
         
         {/* Modal — Ətraflı məlumat */}
         {selectedService && (
@@ -1414,11 +1486,11 @@ export default function App() {
           >
             <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
             <div
-              className="relative w-full max-w-lg bg-[#161B22] rounded-t-[32px] p-6 space-y-5 border border-white/10 pb-10"
+              className={`relative w-full max-w-lg rounded-t-[32px] p-6 space-y-5 border pb-10 ${theme === 'dark' ? 'bg-[#161B22] border-white/10' : 'bg-white border-navy/10'}`}
               onClick={e => e.stopPropagation()}
             >
               {/* Üst çubuq */}
-              <div className="w-10 h-1 rounded-full bg-white/20 mx-auto" />
+              <div className={`w-10 h-1 rounded-full mx-auto ${theme === 'dark' ? 'bg-white/20' : 'bg-navy/20'}`} />
 
               {/* Başlıq */}
               <div className="flex items-center gap-4">
@@ -1481,10 +1553,10 @@ export default function App() {
         )}
 
         {/* ── Başlıq ── */}
-        <div className="px-5 py-4 flex items-center gap-3 sticky top-0 bg-[#0D1117]/90 backdrop-blur-xl z-50 border-b border-white/5">
+        <div className={`px-5 py-4 flex items-center gap-3 sticky top-0 backdrop-blur-xl z-50 border-b ${theme === 'dark' ? 'bg-[#0D1117]/90 border-white/5' : 'bg-white/90 border-navy/5'}`}>
           <button
             onClick={() => setActiveTab('home')}
-            className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center hover:bg-teal-brand/10 transition-colors active:scale-95"
+            className={`w-10 h-10 rounded-full flex items-center justify-center hover:bg-teal-brand/10 transition-colors active:scale-95 ${theme === 'dark' ? 'bg-white/5' : 'bg-navy/5'}`}
           >
             <ArrowLeft size={20} />
           </button>
@@ -1508,7 +1580,7 @@ export default function App() {
           </div>
 
           {/* Axtarış */}
-          <div className="flex items-center gap-3 p-3.5 rounded-2xl bg-white/5 border border-white/5">
+          <div className={`flex items-center gap-3 p-3.5 rounded-2xl border ${theme === 'dark' ? 'bg-white/5 border-white/5' : 'bg-navy/5 border-navy/5'}`}>
             <Search size={18} className="opacity-30 shrink-0" />
             <input
               type="text"
@@ -1533,7 +1605,7 @@ export default function App() {
                 className={`px-4 py-2 rounded-full text-[10px] font-black whitespace-nowrap transition-all border active:scale-95 ${
                   activeFilter === chip.id
                     ? 'bg-teal-brand text-navy border-teal-brand shadow-lg shadow-teal-brand/20'
-                    : 'bg-white/5 text-white/40 border-white/5 hover:border-white/10'
+                    : theme === 'dark' ? 'bg-white/5 text-white/40 border-white/5 hover:border-white/10' : 'bg-navy/5 text-navy/40 border-navy/5 hover:border-navy/10'
                 }`}
               >
                 {t(chip.az, chip.en)}
@@ -1573,7 +1645,7 @@ export default function App() {
                 { az: "Uşaq müavinəti", en: "Child benefits", icon: "👶" },
                 { az: "İş axtarışı", en: "Job search", icon: "💼" }
               ].map((s, idx) => (
-                <div key={idx} className="p-2.5 rounded-xl bg-white/5 flex items-center gap-2 text-[10px] font-bold opacity-70">
+                <div key={idx} className={`p-2.5 rounded-xl flex items-center gap-2 text-[10px] font-bold opacity-70 ${theme === 'dark' ? 'bg-white/5' : 'bg-navy/5'}`}>
                   <span>{s.icon}</span>
                   <span>{t(s.az, s.en)}</span>
                 </div>
@@ -1615,7 +1687,7 @@ export default function App() {
               filteredServices.map((service) => (
                 <div
                   key={service.id}
-                  className="p-4 rounded-3xl bg-white/5 border border-white/5 space-y-4 active:scale-[0.99] transition-transform"
+                  className={`p-4 rounded-3xl border space-y-4 active:scale-[0.99] transition-transform ${theme === 'dark' ? 'bg-white/5 border-white/5' : 'bg-navy/5 border-navy/5'}`}
                 >
                   <div className="flex gap-4">
                     <div
@@ -1639,24 +1711,24 @@ export default function App() {
                   </div>
 
                   {/* Düymələr — indi işlək */}
-                  <div className="flex gap-2 pt-1 border-t border-white/5">
+                  <div className={`flex gap-2 pt-1 border-t ${theme === 'dark' ? 'border-white/5' : 'border-navy/5'}`}>
                     <button
                       onClick={() => makeCall(service.phone)}
-                      className="flex-1 py-2.5 rounded-xl bg-white/5 text-[10px] font-black flex items-center justify-center gap-1.5 hover:bg-white/10 active:scale-95 transition-all"
+                      className={`flex-1 py-2.5 rounded-xl text-[10px] font-black flex items-center justify-center gap-1.5 active:scale-95 transition-all ${theme === 'dark' ? 'bg-white/5 hover:bg-white/10' : 'bg-navy/5 hover:bg-navy/10'}`}
                     >
                       <Phone size={12} />
                       {t("Zəng", "Call")}
                     </button>
                     <button
                       onClick={() => openMap(service.mapQuery)}
-                      className="flex-1 py-2.5 rounded-xl bg-white/5 text-[10px] font-black flex items-center justify-center gap-1.5 hover:bg-white/10 active:scale-95 transition-all"
+                      className={`flex-1 py-2.5 rounded-xl text-[10px] font-black flex items-center justify-center gap-1.5 active:scale-95 transition-all ${theme === 'dark' ? 'bg-white/5 hover:bg-white/10' : 'bg-navy/5 hover:bg-navy/10'}`}
                     >
                       <MapPin size={12} />
                       {t("Xəritə", "Map")}
                     </button>
                     <button
                       onClick={() => setSelectedService(service)}
-                      className="flex-1 py-2.5 rounded-xl bg-white/5 text-[10px] font-black flex items-center justify-center gap-1.5 hover:bg-white/10 active:scale-95 transition-all"
+                      className={`flex-1 py-2.5 rounded-xl text-[10px] font-black flex items-center justify-center gap-1.5 active:scale-95 transition-all ${theme === 'dark' ? 'bg-white/5 hover:bg-white/10' : 'bg-navy/5 hover:bg-navy/10'}`}
                     >
                       <Info size={12} />
                       {t("Ətraflı", "More")}
@@ -1819,9 +1891,9 @@ export default function App() {
     };
 
     return (
-      <div className="flex flex-col min-h-full bg-[#0D1117] text-[#E6EDF3]">
+      <div className="flex flex-col min-h-full">
         {/* Başlıq */}
-        <div className="px-5 py-4 flex items-center gap-3 sticky top-0 bg-[#0D1117]/90 backdrop-blur-xl z-50 border-b border-white/5">
+        <div className={`px-5 py-4 flex items-center gap-3 sticky top-0 backdrop-blur-xl z-50 border-b ${theme === 'dark' ? 'bg-[#0D1117]/90 border-white/5' : 'bg-white/90 border-navy/5'}`}>
           <button
             onClick={() => setSelectedArticle(null)}
             className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center active:scale-95 transition-transform"
@@ -1834,7 +1906,7 @@ export default function App() {
           <button
             onClick={toggleSave}
             className={`w-10 h-10 rounded-full flex items-center justify-center transition-all active:scale-95 ${
-              isSaved ? 'bg-teal-brand/20 text-teal-brand' : 'bg-white/5 opacity-40'
+              isSaved ? 'bg-teal-brand/20 text-teal-brand' : (theme === 'dark' ? 'bg-white/5 opacity-40' : 'bg-navy/5 opacity-40')
             }`}
           >
             <Bookmark size={18} fill={isSaved ? 'currentColor' : 'none'} />
@@ -1850,7 +1922,7 @@ export default function App() {
               className="w-full h-full object-cover"
               referrerPolicy="no-referrer"
             />
-            <div className="absolute inset-0 bg-gradient-to-t from-[#0D1117] via-[#0D1117]/30 to-transparent" />
+            <div className={`absolute inset-0 bg-gradient-to-t ${theme === 'dark' ? 'from-[#0D1117] via-[#0D1117]/30' : 'from-[#F8FAFF] via-[#F8FAFF]/30'} to-transparent`} />
             <div className="absolute bottom-4 left-5 right-5 flex items-center gap-3">
               <span
                 className="px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest bg-teal-brand text-navy"
@@ -1955,8 +2027,28 @@ export default function App() {
           </div>
         </div>
 
+        {/* Təcili Yardım Xətləri */}
+        <div className="space-y-3">
+          <h3 className="text-xs font-black opacity-50 px-1">{t("Təcili Psixoloji Yardım", "Emergency Psychological Support")}</h3>
+          <div className="grid grid-cols-1 gap-3">
+             {EMERGENCY_SERVICES.map(s => (
+               <a href={`tel:${s.phone.replace(/[\s()-]/g, '')}`} key={s.id} className={`flex items-center gap-4 p-4 rounded-2xl border ${theme === 'dark' ? 'bg-white/5 border-white/10' : 'bg-navy/5 border-navy/5'}`}>
+                 <div className="w-10 h-10 rounded-full bg-teal-brand flex items-center justify-center text-navy">
+                   {s.id === '1' ? <AlertTriangle size={20} /> : <Phone size={20} />}
+                 </div>
+                 <div>
+                   <div className="font-bold text-xs">{t(s.nameAz, s.nameEn)}</div>
+                   <div className="text-[10px] opacity-60 flex items-center gap-1">
+                     <span className="font-bold">{s.phone}</span> • {t(s.descAz, s.descEn)}
+                   </div>
+                 </div>
+               </a>
+             ))}
+          </div>
+        </div>
+
         {/* Axtarış */}
-        <div className="flex items-center gap-3 p-3.5 rounded-2xl bg-white/5 border border-white/5">
+        <div className={`flex items-center gap-3 p-3.5 rounded-2xl border ${theme === 'dark' ? 'bg-white/5 border-white/5' : 'bg-navy/5 border-navy/5'}`}>
           <Search size={16} className="opacity-30 shrink-0" />
           <input
             type="text"
@@ -1980,7 +2072,7 @@ export default function App() {
               className={`px-5 py-2.5 rounded-2xl text-[11px] font-black whitespace-nowrap transition-all active:scale-95 ${
                 resourceFilter === cat.id
                   ? 'bg-teal-brand text-navy shadow-lg shadow-teal-brand/20'
-                  : 'bg-white/5 border border-white/5 opacity-50'
+                  : theme === 'dark' ? 'bg-white/5 border border-white/5 opacity-50' : 'bg-navy/5 border border-navy/5 opacity-50'
               }`}
               onClick={() => setResourceFilter(cat.id)}
             >
@@ -2030,7 +2122,7 @@ export default function App() {
               <div
                 key={article.id}
                 onClick={() => openArticle(article)}
-                className="flex gap-4 p-3 bg-white/5 rounded-3xl border border-white/5 hover:bg-white/10 transition-colors cursor-pointer group active:scale-[0.98]"
+                className={`flex gap-4 p-3 rounded-3xl border hover:opacity-80 transition-colors cursor-pointer group active:scale-[0.98] ${theme === 'dark' ? 'bg-white/5 border-white/5' : 'bg-navy/5 border-navy/5'}`}
               >
                 {/* Şəkil */}
                 <div className="w-20 h-20 rounded-2xl overflow-hidden shrink-0 ring-1 ring-white/10 relative">
@@ -2116,9 +2208,9 @@ export default function App() {
     });
 
     return (
-      <div className="flex flex-col min-h-full bg-[#0A0C10] text-[#E6EDF3]">
+      <div className="flex flex-col min-h-full">
         {/* Page Header */}
-        <div className="px-5 py-4 flex items-center gap-3 sticky top-0 bg-[#0A0C10]/95 backdrop-blur-xl z-50 border-b border-white/5">
+        <div className={`px-5 py-4 flex items-center gap-3 sticky top-0 backdrop-blur-xl z-50 border-b ${theme === 'dark' ? 'bg-[#0A0C10]/95 border-white/5' : 'bg-white/95 border-navy/5'}`}>
           <button 
             onClick={() => setActiveTab('home')}
             className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center hover:bg-teal-brand/10 transition-colors"
@@ -2166,16 +2258,16 @@ export default function App() {
           )}
 
           {/* Directory Toggle */}
-          <div className="flex p-1.5 bg-white/5 rounded-2xl border border-white/5 relative">
+          <div className={`flex p-1.5 rounded-2xl border relative ${theme === 'dark' ? 'bg-white/5 border-white/5' : 'bg-navy/5 border-navy/5'}`}>
             <button 
               onClick={() => { setHomeCategory('ai'); setPsychSearch(''); }}
-              className={`flex-1 py-3 rounded-xl text-[11px] font-black tracking-widest transition-all z-10 ${homeCategory === 'ai' ? 'text-navy' : 'text-white/40'}`}
+              className={`flex-1 py-3 rounded-xl text-[11px] font-black tracking-widest transition-all z-10 ${homeCategory === 'ai' ? 'text-navy' : (theme === 'dark' ? 'text-white/40' : 'text-navy/40')}`}
             >
               {t("🤖 AI DOSTLAR", "🤖 AI BUDDIES")}
             </button>
             <button 
               onClick={() => { setHomeCategory('real'); setPsychSearch(''); }}
-              className={`flex-1 py-3 rounded-xl text-[11px] font-black tracking-widest transition-all z-10 ${homeCategory === 'real' ? 'text-navy' : 'text-white/40'}`}
+              className={`flex-1 py-3 rounded-xl text-[11px] font-black tracking-widest transition-all z-10 ${homeCategory === 'real' ? 'text-navy' : (theme === 'dark' ? 'text-white/40' : 'text-navy/40')}`}
             >
               {t("👨‍⚕️ REAL MÜTƏXƏSSİS", "👨‍⚕️ REAL DOCS")}
             </button>
@@ -2194,13 +2286,13 @@ export default function App() {
 
           {/* Search Bar */}
           <div className="relative">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-white/20" size={16} />
+            <Search className={`absolute left-4 top-1/2 -translate-y-1/2 ${theme === 'dark' ? 'text-white/20' : 'text-navy/20'}`} size={16} />
             <input 
               type="text"
               value={psychSearch}
               onChange={(e) => setPsychSearch(e.target.value)}
               placeholder={t("Ad və ya ixtisas üzrə axtar...", "Search by name or specialty...")}
-              className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-xs font-bold focus:outline-none focus:border-teal-brand/50 transition-colors"
+              className={`w-full border rounded-2xl py-4 pl-12 pr-4 text-xs font-bold focus:outline-none focus:border-teal-brand/50 transition-colors ${theme === 'dark' ? 'bg-white/5 border-white/10' : 'bg-transparent border-navy/10'}`}
             />
           </div>
 
@@ -2212,7 +2304,7 @@ export default function App() {
                   key={p.id}
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className={`p-4 rounded-[32px] glass glass-dark bg-white/5 border border-white/5 flex items-center gap-4 hover:border-teal-brand/20 transition-colors group`}
+                  className={`p-4 rounded-[32px] border flex items-center gap-4 hover:border-teal-brand/20 transition-colors group ${theme === 'dark' ? 'bg-white/5 border-white/5' : 'bg-navy/5 border-navy/5'}`}
                 >
                   <div className="relative">
                     <img src={p.avatar} alt={p.nameAz} className="w-16 h-16 rounded-3xl object-cover ring-1 ring-white/10 shadow-xl" referrerPolicy="no-referrer" />
@@ -2338,7 +2430,7 @@ export default function App() {
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="relative w-full max-w-xs bg-[#161B22] rounded-[32px] p-8 border border-white/10 text-center space-y-6"
+              className={`relative w-full max-w-xs rounded-[32px] p-8 border text-center space-y-6 ${theme === 'dark' ? 'bg-[#161B22] border-white/10' : 'bg-white border-navy/10'}`}
             >
               <div className="w-20 h-20 rounded-full bg-red-500/10 flex items-center justify-center text-red-500 mx-auto text-4xl">
                 <Trash2 size={40} />
@@ -2422,6 +2514,22 @@ export default function App() {
             </div>
           </div>
           <ChevronRight size={20} className="opacity-20 group-hover:opacity-100 group-hover:text-white transition-all" />
+        </button>
+
+        <button 
+          onClick={() => setActiveTab('past_chats')}
+          className="w-full flex items-center justify-between p-4 rounded-3xl glass glass-dark bg-white/5 border border-white/10 hover:border-teal-brand/30 transition-all group"
+        >
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-teal-brand/10 flex items-center justify-center text-teal-brand">
+              <MessageCircle size={24} />
+            </div>
+            <div className="text-left">
+              <h3 className="text-sm font-black group-hover:text-teal-brand transition-colors">{t("Keçmiş Söhbətlər", "Past Chats")}</h3>
+              <p className="text-[10px] font-bold opacity-40">{t("AI ilə olan bütün söhbət tarixçələriniz", "All your chat histories with AI")}</p>
+            </div>
+          </div>
+          <ChevronRight size={20} className="opacity-20 group-hover:opacity-100 group-hover:text-teal-brand transition-all" />
         </button>
       </div>
 
@@ -2575,6 +2683,56 @@ export default function App() {
     </div>
   );
 
+  const renderPastChats = () => (
+    <div className="flex flex-col min-h-full">
+      {/* Header */}
+      <div className={`px-5 py-4 flex items-center gap-3 sticky top-0 backdrop-blur-xl z-50 border-b ${theme === 'dark' ? 'bg-[#0A0C10]/95 border-white/5' : 'bg-white/95 border-navy/5'}`}>
+        <button 
+          onClick={() => setActiveTab('settings')}
+          className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center hover:bg-teal-brand/10 transition-colors"
+        >
+          <ArrowLeft size={20} />
+        </button>
+        <div>
+          <h2 className="text-sm font-black tracking-tighter">{t("Keçmiş Söhbətlər", "Past Chats")}</h2>
+          <p className="text-[10px] font-bold opacity-40">{pastChats.length} {t("söhbət", "chats")}</p>
+        </div>
+      </div>
+
+      <div className="flex-1 p-5 space-y-4">
+        {pastChats.length > 0 ? (
+          pastChats.map(session => (
+            <motion.div 
+              key={session.id}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className={`p-4 rounded-3xl border flex flex-col gap-3 group ${theme === 'dark' ? 'bg-white/5 border-white/5 hover:border-teal-brand/30' : 'bg-navy/5 border-navy/5 hover:border-teal-brand/30'} transition-all`}
+            >
+              <div className="flex items-center gap-3">
+                <img src={session.avatar} alt={session.psychNameAz} className="w-10 h-10 rounded-full object-cover" />
+                <div className="flex-1">
+                  <h4 className="text-xs font-black">{lang === 'az' ? session.psychNameAz : session.psychNameEn}</h4>
+                  <p className="text-[9px] font-bold opacity-50">{session.date} • {session.time}</p>
+                </div>
+                <div className="text-[10px] font-black text-teal-brand bg-teal-brand/10 px-2 py-1 rounded-lg">
+                  {session.messages.length} {t("mesaj", "messages")}
+                </div>
+              </div>
+              <div className={`p-3 rounded-2xl ${theme === 'dark' ? 'bg-[#0D1117] border border-white/5' : 'bg-white border border-navy/5'} text-[10px] font-bold opacity-70 italic line-clamp-2`}>
+                "{session.messages.length > 1 ? session.messages[session.messages.length - 1].content : "..."}"
+              </div>
+            </motion.div>
+          ))
+        ) : (
+          <div className="text-center py-20 opacity-30 mt-10">
+            <MessageCircle size={48} className="mx-auto mb-4" />
+            <p className="text-sm font-black">{t("Söhbət tarixçəsi yoxdur", "No chat history")}</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <div 
       onContextMenu={(e) => e.preventDefault()}
@@ -2631,6 +2789,7 @@ export default function App() {
                   {activeTab === 'feedback' && renderFeedback()}
                   {activeTab === 'social_services' && renderSocialServices()}
                   {activeTab === 'resources' && renderResources()}
+                  {activeTab === 'past_chats' && renderPastChats()}
                 </motion.div>
               </AnimatePresence>
             </div>
@@ -2734,7 +2893,7 @@ export default function App() {
                           {isAiVoiceEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
                         </button>
                         <button 
-                          onClick={() => setIsChatOpen(false)}
+                          onClick={handleCloseChat}
                           className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center hover:bg-white/10"
                         >
                           <X size={18} />
@@ -2913,10 +3072,10 @@ export default function App() {
 
                         <div className="grid grid-cols-1 gap-3">
                           {[
-                            { label: "Psixoloji yardım (195)", phone: "195" },
-                            { label: "Təcili yardım (112)", phone: "112" },
-                            { label: "Polis (102)", phone: "102" },
-                            { label: "Təcili tibbi yardım (103)", phone: "103" }
+                            { label: "Psixoloji yardım (988)", phone: "988", icon: ShieldAlert },
+                            { label: "Psixoloji dəstək (012) 510-66-36", phone: "0125106636", icon: Phone },
+                            { label: "Polis (102)", phone: "102", icon: Phone },
+                            { label: "Təcili tibbi yardım (103)", phone: "103", icon: Phone }
                           ].map((item, idx) => (
                             <motion.a
                               key={idx}
@@ -2926,7 +3085,7 @@ export default function App() {
                               transition={{ delay: idx * 0.1 }}
                               className="w-full bg-white text-red-600 py-4 rounded-2xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-3 active:scale-95 transition-transform"
                             >
-                              <Phone size={16} />
+                              <item.icon size={16} />
                               {item.label}
                             </motion.a>
                           ))}
