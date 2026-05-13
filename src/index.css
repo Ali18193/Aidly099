@@ -82,7 +82,7 @@
 }
 
 .app-container {
-  @apply w-full h-full max-w-[480px] mx-auto relative flex flex-col shadow-[0_0_100px_rgba(0,0,0,0.5)] overflow-hidden;
+  @apply w-full h-full max-w-[480px] sm:max-w-[540px] md:max-w-[720px] lg:max-w-[960px] mx-auto relative flex flex-col shadow-[0_0_100px_rgba(0,0,0,0.5)] overflow-hidden transition-all duration-500;
   min-height: 100dvh;
   /* Safe Area Support */
   padding-top: env(safe-area-inset-top);

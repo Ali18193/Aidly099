@@ -1,12 +1,98 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // 0. Global Safety Net
     match /{document=**} {
       allow read, write: if false;
     }
-    
+
+    // 1. Primitive Definitions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // 2. Validation Blueprints
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['name', 'age', 'gender', 'healthStatus']) 
+          && data.keys().size() == 4
+          && data.name is string && data.name.size() <= 100
+          && data.age is string && data.age.size() <= 3
+          && data.gender is string && (data.gender == "" || data.gender in ['male', 'female', 'other'])
+          && data.healthStatus is string && data.healthStatus.size() <= 2000;
+    }
+
+    function isValidMoodLog(data) {
+      return data.keys().hasAll(['mood', 'timestamp', 'dateLabel'])
+          && (data.keys().size() == 3 || (data.keys().size() == 4 && data.keys().hasAll(['note'])))
+          && data.mood is string && data.mood.size() <= 50
+          && data.dateLabel is string && data.dateLabel.size() <= 20
+          && data.timestamp == request.time
+          && (!data.keys().hasAny(['note']) || (data.note is string && data.note.size() <= 500));
+    }
+
+    function isValidTask(data) {
+      return data.keys().hasAll(['title', 'completed', 'createdAt', 'priority', 'category'])
+          && (data.keys().size() == 5 || (data.keys().size() == 6 && data.keys().hasAll(['dueDate'])))
+          && data.title is string && data.title.size() <= 200
+          && data.completed is bool
+          && data.priority in ['high', 'medium', 'low']
+          && data.category in ['personal', 'work', 'health', 'other']
+          && (!data.keys().hasAny(['dueDate']) || (data.dueDate is string && data.dueDate.size() <= 20 || data.dueDate == null));
+    }
+
+    // 3. Collection Rules
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      
+      // We don't allow list on users collection to prevent scraping
+      allow list: if false;
+
+      allow create: if isOwner(userId) 
+                    && isValidId(userId) 
+                    && isValidUserProfile(incoming());
+
+      allow update: if isOwner(userId) 
+                    && isValidId(userId) 
+                    && isValidUserProfile(incoming())
+                    && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'age', 'gender', 'healthStatus']);
+
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      match /mood_logs/{logId} {
+        allow read, list: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidMoodLog(incoming());
+        allow delete: if isOwner(userId);
+      }
+
+      match /tasks/{taskId} {
+        allow read, list: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidTask(incoming()) && incoming().createdAt == request.time;
+        allow update: if isOwner(userId) && isValidTask(incoming()) 
+                      && incoming().createdAt == existing().createdAt
+                      && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'completed', 'dueDate', 'priority', 'category']);
+        allow delete: if isOwner(userId);
+      }
+    }
+
+    // Verification codes should be accessible only by server (admin SDK)
     match /verification_codes/{email} {
-      allow read, write: if false; // Only admin
+      allow read, write: if false;
     }
   }
 }

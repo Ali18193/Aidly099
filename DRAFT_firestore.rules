@@ -1,0 +1,63 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 1. Primitive Definitions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // 2. Validation Blueprints
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['age', 'gender', 'healthStatus']) 
+          && data.keys().size() == 3
+          && data.age is string && data.age.size() >= 1 && data.age.size() <= 3
+          && data.gender is string && data.gender in ['male', 'female', 'other']
+          && data.healthStatus is string && data.healthStatus.size() <= 2000;
+    }
+
+    // 3. Collection Rules
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      
+      // We don't allow list on users collection to prevent scraping
+      allow list: if false;
+
+      allow create: if isOwner(userId) 
+                    && isValidId(userId) 
+                    && isValidUserProfile(incoming());
+
+      allow update: if isOwner(userId) 
+                    && isValidId(userId) 
+                    && isValidUserProfile(incoming())
+                    && incoming().diff(existing()).affectedKeys().hasOnly(['age', 'gender', 'healthStatus']);
+
+      allow delete: if isOwner(userId) && isValidId(userId);
+    }
+
+    // Verification codes should be accessible only by server (admin SDK)
+    match /verification_codes/{email} {
+      allow read, write: if false;
+    }
+  }
+}

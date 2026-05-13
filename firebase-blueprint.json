@@ -1,0 +1,102 @@
+{
+  "entities": {
+    "user_profile": {
+      "title": "User Profile",
+      "description": "Stores user demographics and health status for personalized AI support.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "User's full name or nickname."
+        },
+        "age": {
+          "type": "string",
+          "description": "User's age as a string."
+        },
+        "gender": {
+          "type": "string",
+          "description": "User's gender identity."
+        },
+        "healthStatus": {
+          "type": "string",
+          "description": "User-provided health conditions or mental state."
+        }
+      },
+      "required": ["name", "age", "gender", "healthStatus"]
+    },
+    "mood_log": {
+      "title": "Mood Log",
+      "description": "Daily mood entry for tracking mental well-being over time.",
+      "type": "object",
+      "properties": {
+        "mood": {
+          "type": "string",
+          "description": "Selected mood emoji or label (e.g., 'ola', 'yaxsi', 'normal', 'pis', 'cox_pis')."
+        },
+        "note": {
+          "type": "string",
+          "description": "Optional short note about the user's feelings."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server-side timestamp of the entry."
+        },
+        "dateLabel": {
+          "type": "string",
+          "description": "Date string for grouping (e.g., '2026-05-13')."
+        }
+      },
+      "required": ["mood", "timestamp", "dateLabel"]
+    },
+    "task": {
+      "title": "Task",
+      "description": "User task or goal with an optional due date.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "What needs to be done."
+        },
+        "completed": {
+          "type": "boolean",
+          "description": "Completion status."
+        },
+        "dueDate": {
+          "type": "string",
+          "format": "date",
+          "description": "Optional deadline for the task."
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["high", "medium", "low"],
+          "description": "Task priority level."
+        },
+        "category": {
+          "type": "string",
+          "enum": ["personal", "work", "health", "other"],
+          "description": "Task category."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["title", "completed", "createdAt"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "user_profile",
+      "description": "Collection of user profiles keyed by their Firebase Auth Uid."
+    },
+    "users/{userId}/mood_logs/{logId}": {
+      "schema": "mood_log",
+      "description": "Daily mood logs for a specific user."
+    },
+    "users/{userId}/tasks/{taskId}": {
+      "schema": "task",
+      "description": "List of personal tasks for each user."
+    }
+  }
+}

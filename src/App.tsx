@@ -49,7 +49,14 @@ import {
   Bookmark,
   CheckCircle,
   Video,
-  ShieldAlert
+  ShieldAlert,
+  Lock,
+  ListTodo,
+  CheckSquare,
+  Circle,
+  Flame,
+  Minus,
+  ArrowDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { getAIAdvice, getAICounseling, getAICounselingStream } from './lib/gemini';
@@ -65,10 +72,70 @@ import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   sendPasswordResetEmail,
-  signInAnonymously
+  signInAnonymously,
+  deleteUser
 } from 'firebase/auth';
+import { db } from './lib/firebase';
+import { doc, getDoc, setDoc, getDocFromServer, collection, query, orderBy, limit, getDocs, serverTimestamp, where, addDoc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+
+import { OnboardingOverlay } from './components/OnboardingOverlay';
+
+// Firestore Error Types
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 // Types
+interface UserProfile {
+  name: string;
+  age: string;
+  gender: string;
+  healthStatus: string;
+}
+
 interface Session {
   id: string;
   nameAz: string;
@@ -107,6 +174,24 @@ interface Message {
   detectedEmotion?: string;
 }
 
+interface MoodLog {
+  id: string;
+  mood: string;
+  note?: string;
+  timestamp: any;
+  dateLabel: string;
+}
+
+interface Task {
+  id: string;
+  title: string;
+  completed: boolean;
+  dueDate?: string;
+  priority: 'high' | 'medium' | 'low';
+  category: 'personal' | 'work' | 'health' | 'other';
+  createdAt: any;
+}
+
 interface PastChatSession {
   id: string;
   psychId: string;
@@ -119,9 +204,9 @@ interface PastChatSession {
 }
 
 const PSYCHOLOGISTS = [
-  { id: '2', nameAz: 'Dr. Samir Qasımov', nameEn: 'Dr. Samir Gasimov', specialtyAz: 'Təşviş və Stress', specialtyEn: 'Anxiety and Stress', avatar: 'https://picsum.photos/seed/samir/100/100', rating: "4.9", chatCount: "2.3k" },
-  { id: '3', nameAz: 'Dr. Günel Sadıqova', nameEn: 'Dr. Gunel Sadiqova', specialtyAz: 'Uşaq Psixoloqu', specialtyEn: 'Child Psychologist', avatar: 'https://picsum.photos/seed/gunel/100/100', rating: "4.8", chatCount: "1.9k" },
-  { id: '4', nameAz: 'Aydan (Tələbə Dostu)', nameEn: 'Aydan (Student Buddy)', specialtyAz: 'Tələbə və məktəblilər üçün', specialtyEn: 'For Students and Pupils', avatar: 'https://picsum.photos/seed/student/100/100', rating: "4.9", chatCount: "3.1k" },
+  { id: '2', nameAz: 'Dr. Samir Qasımov', nameEn: 'Dr. Samir Gasimov', specialtyAz: 'Təşviş və Stress', specialtyEn: 'Anxiety and Stress', avatar: 'https://picsum.photos/seed/samir/100/100', rating: "4.9", chatCount: "2.3k", titleAz: 'Bəy', titleEn: 'Mr.', shortNameAz: 'Samir', shortNameEn: 'Samir', gender: 'male' },
+  { id: '3', nameAz: 'Dr. Günel Sadıqova', nameEn: 'Dr. Gunel Sadiqova', specialtyAz: 'Uşaq Psixoloqu', specialtyEn: 'Child Psychologist', avatar: 'https://picsum.photos/seed/gunel/100/100', rating: "4.8", chatCount: "1.9k", titleAz: 'Xanım', titleEn: 'Ms.', shortNameAz: 'Günel', shortNameEn: 'Gunel', gender: 'female' },
+  { id: '4', nameAz: 'Aydan (Tələbə Dostu)', nameEn: 'Aydan (Student Buddy)', specialtyAz: 'Tələbə və məktəblilər üçün', specialtyEn: 'For Students and Pupils', avatar: 'https://picsum.photos/seed/student/100/100', rating: "4.9", chatCount: "3.1k", titleAz: 'Xanım', titleEn: 'Ms.', shortNameAz: 'Aydan', shortNameEn: 'Aydan', gender: 'female' },
 ];
 
 const EMERGENCY_SERVICES = [
@@ -299,6 +384,10 @@ export default function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authMode, setAuthMode] = useState<'login' | 'register' | 'forgot'>('login');
   
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [isProfileComplete, setIsProfileComplete] = useState(false);
+  const [profileLoading, setProfileLoading] = useState(false);
+  
   const [lang, setLang] = useState<'az' | 'en'>('az');
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [activeTab, setActiveTab] = useState<'home' | 'test' | 'results' | 'sessions' | 'settings' | 'social_services' | 'resources' | 'feedback' | 'past_chats'>('home');
@@ -351,6 +440,19 @@ export default function App() {
   const [resourceSearch, setResourceSearch] = useState('');
   const [resourceFilter, setResourceFilter] = useState('Hamısı');
   
+  const [moodLogs, setMoodLogs] = useState<MoodLog[]>([]);
+  const [isDailyModalOpen, setIsDailyModalOpen] = useState(false);
+  const [moodNote, setMoodNote] = useState("");
+  const [selectedMoodForCheckin, setSelectedMoodForCheckin] = useState<string | null>(null);
+
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
+  const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [newTaskDueDate, setNewTaskDueDate] = useState("");
+  const [newTaskPriority, setNewPriority] = useState<'high' | 'medium' | 'low'>('medium');
+  const [newTaskCategory, setNewCategory] = useState<'personal' | 'work' | 'health' | 'other'>('personal');
+  const [isTaskSaving, setTaskSaving] = useState(false);
+
   const chatEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -380,20 +482,45 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // Validate connection to Firestore on boot as requested by instructions
+    const testConnection = async () => {
+      try {
+        await getDocFromServer(doc(db, 'test', 'connection'));
+      } catch (error: any) {
+        if(error instanceof Error && error.message.includes('the client is offline')) {
+          console.error("Please check your Firebase configuration.");
+        }
+      }
+    };
+    testConnection();
+  }, []);
+
+  useEffect(() => {
     let interval: NodeJS.Timeout;
 
-    if (user && !isEmailVerified) {
+    if (user && !isEmailVerified && !user.isAnonymous) {
       interval = setInterval(async () => {
+        if (!navigator.onLine) return; // Don't even try if offline
+        
         try {
-          await user.reload();
+          // Attempt reload with a timeout or catch early to avoid long hangs
+          const reloadPromise = user.reload();
+          await Promise.race([
+            reloadPromise,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Reload timeout')), 10000))
+          ]);
+          
           if (user.emailVerified) {
             setIsEmailVerified(true);
             clearInterval(interval);
           }
-        } catch (err) {
-          console.error("Verification poll error:", err);
+        } catch (err: any) {
+          // Only log if it's not a expected network error or after several failures
+          if (!err.message.includes('network-request-failed')) {
+            console.warn("Verification poll warning:", err.message);
+          }
         }
-      }, 3000);
+      }, 10000); // 10 seconds instead of 3
     }
 
     return () => {
@@ -401,13 +528,205 @@ export default function App() {
     };
   }, [user, isEmailVerified]);
 
-  const handleAnonymousSignIn = async () => {
+  useEffect(() => {
+    if (user) {
+      setProfileLoading(true);
+      const fetchProfile = async () => {
+        const path = `users/${user.uid}`;
+        try {
+          const docRef = doc(db, 'users', user.uid);
+          const docSnap = await getDoc(docRef);
+          if (docSnap.exists()) {
+            const profile = docSnap.data() as UserProfile;
+            setUserProfile(profile);
+            setIsProfileComplete(true);
+            localStorage.setItem(`aidly_user_profile_${user.uid}`, JSON.stringify(profile));
+          } else {
+            // Check if we have a locally saved profile for THIS specific user
+            const savedProfile = localStorage.getItem(`aidly_user_profile_${user.uid}`);
+            if (savedProfile) {
+              const profile = JSON.parse(savedProfile);
+              setUserProfile(profile);
+              setIsProfileComplete(true);
+              // Save to Firestore for persistence
+              await setDoc(docRef, profile);
+            } else {
+              setIsProfileComplete(false);
+              setUserProfile(null);
+            }
+          }
+        } catch (err: any) {
+          if (err?.code === 'permission-denied') {
+            handleFirestoreError(err, OperationType.GET, path);
+          }
+          console.error("Profile fetch error:", err);
+          const savedProfile = localStorage.getItem(`aidly_user_profile_${user.uid}`);
+          if (savedProfile) {
+            const profile = JSON.parse(savedProfile);
+            setUserProfile(profile);
+            setIsProfileComplete(true);
+          }
+        } finally {
+          setProfileLoading(false);
+        }
+      };
+      fetchProfile();
+      fetchMoodLogs();
+    } else {
+      setUserProfile(null);
+      setIsProfileComplete(false);
+      setProfileLoading(false);
+      setMoodLogs([]);
+    }
+  }, [user]);
+
+  const fetchMoodLogs = async () => {
+    if (!user) return;
+    try {
+      const q = query(
+        collection(db, 'users', user.uid, 'mood_logs'),
+        orderBy('timestamp', 'desc'),
+        limit(7)
+      );
+      const querySnapshot = await getDocs(q);
+      const logs: MoodLog[] = [];
+      querySnapshot.forEach((doc) => {
+        logs.push({ id: doc.id, ...doc.data() } as MoodLog);
+      });
+      setMoodLogs(logs.reverse());
+    } catch (err) {
+      console.error("Error fetching mood logs:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (user) {
+      const q = query(
+        collection(db, 'users', user.uid, 'tasks'),
+        orderBy('createdAt', 'desc')
+      );
+      const unsubscribe = onSnapshot(q, (snap) => {
+        const items: Task[] = [];
+        snap.forEach(doc => items.push({ id: doc.id, ...doc.data() } as Task));
+        setTasks(items);
+      }, (err) => {
+        console.error("onSnapshot error:", err);
+      });
+      return () => unsubscribe();
+    }
+  }, [user]);
+
+  const addTask = async () => {
+    if (!user || !newTaskTitle.trim()) return;
+    setTaskSaving(true);
+    try {
+      const taskData = {
+        title: newTaskTitle.trim(),
+        completed: false,
+        dueDate: newTaskDueDate || null,
+        priority: newTaskPriority,
+        category: newTaskCategory,
+        createdAt: serverTimestamp()
+      };
+      await addDoc(collection(db, 'users', user.uid, 'tasks'), taskData);
+      setNewTaskTitle("");
+      setNewTaskDueDate("");
+      setNewPriority("medium");
+      setNewCategory("personal");
+      setIsTaskModalOpen(false);
+    } catch (err) {
+      console.error("Error adding task:", err);
+    } finally {
+      setTaskSaving(false);
+    }
+  };
+
+  const toggleTask = async (taskId: string, currentStatus: boolean) => {
+    if (!user) return;
+    // Optimistic update
+    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, completed: !currentStatus } : t));
+    try {
+      await updateDoc(doc(db, 'users', user.uid, 'tasks', taskId), {
+        completed: !currentStatus
+      });
+    } catch (err) {
+      console.error("Error toggling task:", err);
+      // Revert if error
+      setTasks(prev => prev.map(t => t.id === taskId ? { ...t, completed: currentStatus } : t));
+    }
+  };
+
+  const deleteTask = async (taskId: string) => {
+    if (!user) return;
+    const removed = tasks.find(t => t.id === taskId);
+    setTasks(prev => prev.filter(t => t.id !== taskId));
+    try {
+      await deleteDoc(doc(db, 'users', user.uid, 'tasks', taskId));
+    } catch (err) {
+      console.error("Error deleting task:", err);
+      if (removed) setTasks(prev => [removed, ...prev]);
+    }
+  };
+
+  const saveMoodLog = async () => {
+    if (!user || !selectedMoodForCheckin) return;
+    
+    const dateLabel = new Date().toISOString().split('T')[0];
+    const logData = {
+      mood: selectedMoodForCheckin,
+      note: moodNote,
+      timestamp: serverTimestamp(),
+      dateLabel
+    };
+
+    try {
+      // Check if already exists for today and update or create
+      const moodRef = collection(db, 'users', user.uid, 'mood_logs');
+      const todayQuery = query(moodRef, where('dateLabel', '==', dateLabel));
+      const todaySnap = await getDocs(todayQuery);
+      
+      if (!todaySnap.empty) {
+        const docId = todaySnap.docs[0].id;
+        await setDoc(doc(db, 'users', user.uid, 'mood_logs', docId), logData);
+      } else {
+        await setDoc(doc(moodRef), logData);
+      }
+      
+      setIsDailyModalOpen(false);
+      setMoodNote("");
+      setSelectedMoodForCheckin(null);
+      fetchMoodLogs();
+    } catch (err) {
+      console.error("Error saving mood log:", err);
+      alert(t("Əhval qeyd edilərkən xəta baş verdi.", "Error saving mood log."));
+    }
+  };
+
+  const handleAnonymousSignIn = async (retryCount = 0) => {
     setAuthError(null);
     try {
+      if (!navigator.onLine) {
+        throw new Error(lang === 'az' ? 'İnternet bağlantısı yoxdur.' : 'No internet connection.');
+      }
       await signInAnonymously(auth);
     } catch (err: any) {
-      console.error("Anonymous sign in error:", err);
-      setAuthError(err.message);
+      console.error(`Anonymous sign in attempt ${retryCount + 1} failed:`, err);
+      
+      const isNetworkError = err.message.includes('network-request-failed');
+      
+      if (isNetworkError && retryCount < 2) {
+        // Wait 1s and retry
+        setTimeout(() => handleAnonymousSignIn(retryCount + 1), 1000);
+        return;
+      }
+
+      let msg = err.message;
+      if (isNetworkError) {
+        msg = lang === 'az' 
+          ? 'İnternet bağlantısı problemi. Zəhmət olmasa şəbəkənizi yoxlayın və yenidən cəhd edin.' 
+          : 'Network connection issue. Please check your internet and try again.';
+      }
+      setAuthError(msg);
     }
   };
 
@@ -416,6 +735,19 @@ export default function App() {
       await signOut(auth);
       setUser(null);
       setIsEmailVerified(false);
+      localStorage.removeItem('aidly_chats');
+      localStorage.removeItem('aidly_sessions');
+      localStorage.removeItem('aidly_results');
+      localStorage.removeItem('aidly_pastChats');
+      localStorage.removeItem('aidly_bookings');
+      setChatMessages([]);
+      setSessions([]);
+      setTestResults([]);
+      setPastChats([]);
+      setBookings([]);
+      setAllChats({});
+      setUserProfile(null);
+      setIsProfileComplete(false);
     } catch (err) {
       console.error("Sign out error:", err);
     }
@@ -518,46 +850,46 @@ export default function App() {
     }
   };
 
+  const startSpeak = (text: string) => {
+    const utterance = new SpeechSynthesisUtterance(text);
+    const voices = window.speechSynthesis.getVoices();
+    
+    if (lang === 'az') {
+      const azVoice = voices.find(v => v.lang.includes('az') || v.name.toLowerCase().includes('azerbaijan'));
+      const trVoice = voices.find(v => v.lang.includes('tr') || v.name.toLowerCase().includes('turkish'));
+      
+      if (azVoice) {
+        utterance.voice = azVoice;
+        utterance.lang = 'az-AZ';
+      } else if (trVoice) {
+        utterance.voice = trVoice;
+        utterance.lang = 'tr-TR';
+      } else {
+        utterance.lang = 'az-AZ';
+      }
+    } else {
+      const enVoice = voices.find(v => v.lang.includes('en') && (v.name.includes('Google') || v.name.includes('Premium')));
+      if (enVoice) utterance.voice = enVoice;
+      utterance.lang = 'en-US';
+    }
+    
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    window.speechSynthesis.speak(utterance);
+  };
+
   const speakText = (text: string) => {
     if (!isAiVoiceEnabled || typeof window === 'undefined') return;
-    
-    // Stop any current speech
     window.speechSynthesis.cancel();
     
-    const startSpeak = () => {
-      const utterance = new SpeechSynthesisUtterance(text);
-      const voices = window.speechSynthesis.getVoices();
-      
-      // Try to find a suitable voice
-      if (lang === 'az') {
-        // Priority: 1. Native AZ, 2. Turkish (very similar phonetics), 3. Any voice
-        const azVoice = voices.find(v => v.lang.includes('az') || v.name.toLowerCase().includes('azerbaijan'));
-        const trVoice = voices.find(v => v.lang.includes('tr') || v.name.toLowerCase().includes('turkish'));
-        
-        if (azVoice) {
-          utterance.voice = azVoice;
-          utterance.lang = 'az-AZ';
-        } else if (trVoice) {
-          utterance.voice = trVoice;
-          utterance.lang = 'tr-TR'; // Better fallback than English
-        } else {
-          utterance.lang = 'az-AZ';
-        }
-      } else {
-        const enVoice = voices.find(v => v.lang.includes('en') && (v.name.includes('Google') || v.name.includes('Premium')));
-        if (enVoice) utterance.voice = enVoice;
-        utterance.lang = 'en-US';
-      }
-      
-      utterance.rate = 1.0;
-      utterance.pitch = 1.0;
-      window.speechSynthesis.speak(utterance);
-    };
-
     if (window.speechSynthesis.getVoices().length === 0) {
-      window.speechSynthesis.onvoiceschanged = startSpeak;
+      const handleVoicesOnce = () => {
+        startSpeak(text);
+        window.speechSynthesis.removeEventListener('voiceschanged', handleVoicesOnce);
+      };
+      window.speechSynthesis.addEventListener('voiceschanged', handleVoicesOnce);
     } else {
-      startSpeak();
+      startSpeak(text);
     }
   };
 
@@ -589,6 +921,13 @@ export default function App() {
       if (savedChats) setAllChats(JSON.parse(savedChats));
       if (savedPastChats) setPastChats(JSON.parse(savedPastChats));
       if (savedBookings) setBookings(JSON.parse(savedBookings));
+      
+      const savedProfile = localStorage.getItem('aidly_user_profile');
+      if (savedProfile) {
+        const profile = JSON.parse(savedProfile);
+        setUserProfile(profile);
+        setIsProfileComplete(!!(profile.age && profile.gender && profile.healthStatus));
+      }
     } catch (e) {
       console.warn("Failed to load local data:", e);
     }
@@ -832,7 +1171,6 @@ export default function App() {
         mood: finalScore > 75 ? "😊" : finalScore > 45 ? "😐" : "😔"
       };
 
-      const updatedResults = [newResult, ...testResults];
       setTestResults(prev => [newResult, ...prev]);
       
       setTempAdvice(advice);
@@ -840,14 +1178,76 @@ export default function App() {
     }
   };
 
+  const handleOnboardingComplete = async (profile: UserProfile) => {
+    setUserProfile(profile);
+    setIsProfileComplete(true);
+    if (user) {
+      localStorage.setItem(`aidly_user_profile_${user.uid}`, JSON.stringify(profile));
+      const path = `users/${user.uid}`;
+      try {
+        await setDoc(doc(db, 'users', user.uid), profile);
+      } catch (err: any) {
+        if (err?.code === 'permission-denied') {
+          handleFirestoreError(err, OperationType.WRITE, path);
+        }
+        console.error("Error saving profile to firestore:", err);
+      }
+    }
+  };
+
   const handleSendMessage = async (e?: FormEvent) => {
     if (e) e.preventDefault();
     if (!inputText.trim() || isTyping) return;
 
+    if (chatMessages.length === 1 && chatMessages[0].content === (lang === 'az' ? "Salam! Sizə necə müraciət edim?" : "Salam! How should I address you?")) {
+      // Capture name
+      const name = inputText.trim();
+      const existingProfile = userProfile || { age: '', gender: '', healthStatus: '', name: '' };
+      const newProfile = { ...existingProfile, name };
+      setUserProfile(newProfile);
+      
+      // Don't mark complete unless other fields are also there
+      const isActuallyComplete = newProfile.age !== '' && newProfile.gender !== '' && newProfile.healthStatus !== '';
+      setIsProfileComplete(isActuallyComplete);
+
+      if (user) {
+        localStorage.setItem(`aidly_user_profile_${user.uid}`, JSON.stringify(newProfile));
+        try {
+          await setDoc(doc(db, 'users', user.uid), newProfile);
+        } catch (err) {
+          console.error("Error saving name to firestore:", err);
+        }
+      }
+      
+      const userMsg: Message = { id: `u-${Date.now()}`, role: 'user', content: inputText };
+      const psych = PSYCHOLOGISTS.find(p => p.id === activeChatPsych);
+      const psychName = lang === 'az' ? psych?.shortNameAz : psych?.shortNameEn;
+      const psychTitle = lang === 'az' ? psych?.titleAz : psych?.titleEn;
+      
+      const userGender = userProfile?.gender || newProfile.gender;
+      const userTitle = userGender === 'female' ? (lang === 'az' ? 'Xanım' : 'Ms.') : (lang === 'az' ? 'Bəy' : 'Mr.');
+      
+      const welcomeMsg = lang === 'az' 
+        ? `Salam, ${name} ${userTitle}. Sizin Ai məsləhətçiniz olan ${psychName} ${psychTitle}-dır. Sizi dinləyirəm.`
+        : `Hello, ${name} ${userTitle}. I am ${psychName} ${psychTitle}, your Ai counselor. I am listening to you.`;
+      
+      const modelMsg: Message = { id: `m-${Date.now()}`, role: 'model', content: welcomeMsg };
+      const updated = [...chatMessages, userMsg, modelMsg];
+      setChatMessages(updated);
+      setInputText("");
+      if (activeChatPsych) saveChatHistory(activeChatPsych, updated);
+      return;
+    }
+
     const lowerText = inputText.toLowerCase();
 
     // Açar söz siyahıları
-    const TEHLIKELI_SOZLER = ["intihar", "ölmək istəyirəm", "yaşamaq istəmirəm", "həyatıma son", "özümü öldür", "həyatıma son qoymaq", "özümü məhv edəcəm", "özümü öldürəcəm", "özümü öldürmək", "ölmək istəyirəm"];
+    const TEHLIKELI_SOZLER = [
+      "intihar", "ölmək istəyirəm", "yaşamaq istəmirəm", "həyatıma son", 
+      "özümü öldür", "həyatıma son qoymaq", "özümü məhv edəcəm", 
+      "özümü öldürəcəm", "özümü öldürmək", "ölmək", "qəsd etmək",
+      "canıma qıy", "ölmək istəyirəm", "suicide", "kill myself", "want to die"
+    ];
     const KEDER_SOZLER = ["tənhayam", "heç kim sevmir", "ağlayıram", "dözə bilmirəm", "yoruldum", "sıxılıram"];
     const STRESS_SOZLER = ["stress", "narahatam", "nigaran", "qorxuram", "pərt olmuşam"];
 
@@ -862,8 +1262,6 @@ export default function App() {
     // 1. Təcili vəziyyət sistemi (İnternet olsun-olmasın həmişə işləyir)
     if (TEHLIKELI_SOZLER.some(keyword => lowerText.includes(keyword))) {
       setIsEmergencyModalOpen(true);
-    } else {
-      setIsEmergencyModalOpen(false);
     }
     
     const userMsg: Message = { id: `u-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, role: 'user', content: inputText };
@@ -921,26 +1319,31 @@ export default function App() {
         psychName || "", 
         emotionSensitivity,
         (chunk) => {
-          setIsTyping(false); // Hide "Typing..." once we get first chunk
+          setIsTyping(false); 
           fullAiText += chunk;
           
           setChatMessages(prev => prev.map(m => {
             if (m.id === aiMsgId) {
-              // Parse emotion live if possible, or wait for end
               let cleanText = fullAiText;
-              let emotion = m.detectedEmotion || "normal";
+              let emotion = "normal";
               
-              const emotionMatch = fullAiText.match(/\[EMOTION:\s*([^\]]+)\]/);
+              const emotionMatch = fullAiText.match(/\[(?:EMOTION|HISS OLUNAN):\s*([^\]]+)\]/i);
               if (emotionMatch) {
                 emotion = emotionMatch[1].trim().toLowerCase();
-                cleanText = fullAiText.replace(/\[EMOTION:\s*[^\]]+\]/, "").trim();
+                cleanText = fullAiText.replace(/\[(?:EMOTION|HISS OLUNAN):\s*[^\]]+\]/i, "").trim();
+                
+                // Trigger emergency modal if AI detects crisis
+                if (emotion === "crisis") {
+                  setIsEmergencyModalOpen(true);
+                }
               }
 
               return { ...m, content: cleanText, detectedEmotion: emotion };
             }
             return m;
           }));
-        }
+        },
+        userProfile
       );
 
       setIsTyping(false);
@@ -999,11 +1402,25 @@ export default function App() {
     setActiveChatPsych(id);
     setIsChatOpen(true);
     
-    if (allChats[id] && Array.isArray(allChats[id]) && allChats[id].length > 0) {
+    if (allChats[id] && Array.isArray(allChats[id]) && allChats[id].length > 1) {
       setChatMessages(allChats[id]);
     } else {
+      const psych = PSYCHOLOGISTS.find(p => p.id === id);
+      const psychName = lang === 'az' ? psych?.shortNameAz : psych?.shortNameEn;
+      const psychTitle = lang === 'az' ? psych?.titleAz : psych?.titleEn;
+      
+      let initialContent = "";
+      if (!userProfile?.name) {
+        initialContent = lang === 'az' ? "Salam! Sizə necə müraciət edim?" : "Salam! How should I address you?";
+      } else {
+        const userTitle = userProfile.gender === 'female' ? (lang === 'az' ? 'Xanım' : 'Ms.') : (lang === 'az' ? 'Bəy' : 'Mr.');
+        initialContent = lang === 'az' 
+          ? `Salam, ${userProfile.name} ${userTitle}. Sizin Ai məsləhətçiniz olan ${psychName} ${psychTitle}-dır. Sizi dinləyirəm.`
+          : `Hello, ${userProfile.name} ${userTitle}. I am ${psychName} ${psychTitle}, your Ai counselor. I am listening to you.`;
+      }
+
       const initialMsgs: Message[] = [
-        { id: `sys-${Date.now()}`, role: 'model', content: lang === 'az' ? "Salam! Mən sizin AI məsləhətçinizəm. Bu gün sizə necə kömək edə bilərəm?" : "Hi! I am your AI counselor. How can I help you today?" }
+        { id: `sys-${Date.now()}`, role: 'model', content: initialContent }
       ];
       setChatMessages(initialMsgs);
       saveChatHistory(id, initialMsgs);
@@ -1012,7 +1429,7 @@ export default function App() {
 
   const handleCloseChat = () => {
     setIsChatOpen(false);
-    if (activeChatPsych && chatMessages.length > 1) { // Save only if there's actual discussion
+    if (activeChatPsych && chatMessages.length > 2) { // Save only if there's actual discussion
       const psych = PSYCHOLOGISTS.find(p => p.id === activeChatPsych);
       if (psych) {
         const newPastChat: PastChatSession = {
@@ -1032,14 +1449,7 @@ export default function App() {
         });
       }
     }
-    // Clear current chat
-    const initialMsgs: Message[] = [
-      { id: `sys-${Date.now()}`, role: 'model', content: lang === 'az' ? "Salam! Mən sizin AI məsləhətçinizəm. Bu gün sizə necə kömək edə bilərəm?" : "Hi! I am your AI counselor. How can I help you today?" }
-    ];
-    setChatMessages(initialMsgs);
-    if (activeChatPsych) {
-       saveChatHistory(activeChatPsych, initialMsgs);
-    }
+    // Clear current chat cache for next time
     setActiveChatPsych(null);
   };
 
@@ -1379,53 +1789,132 @@ export default function App() {
       {/* Greeting */}
       <div className="space-y-1">
         <p className="text-xs font-bold opacity-30 flex items-center gap-1.5">{t("Xoş gəldiniz", "Welcome")} 👋</p>
-        <h2 className="text-2xl font-black tracking-tight">{t(`Salam, ${user?.email?.split('@')[0]}`, `Hello, ${user?.email?.split('@')[0]}`)}</h2>
+        <h2 className="text-2xl font-black tracking-tight">
+          {t(
+            `Salam, ${userProfile?.name || user?.email?.split('@')[0]}`, 
+            `Hello, ${userProfile?.name || user?.email?.split('@')[0]}`
+          )}
+        </h2>
       </div>
 
-      {/* Mood Section */}
+      {/* Mood Tracker Card */}
       <div className={`p-6 rounded-[32px] glass ${theme === 'dark' ? 'glass-dark bg-[#0E1521]' : 'glass-light bg-navy/5'} space-y-4`}>
-        <h3 className="text-[10px] font-black uppercase tracking-[0.2em] opacity-40 text-center">{t("BU GÜN NECƏSƏN?", "HOW ARE YOU TODAY?")}</h3>
+        <h3 className="text-[10px] font-black uppercase tracking-[0.2em] opacity-40 text-center">
+          {moodLogs.some(l => l.dateLabel === new Date().toISOString().split('T')[0]) 
+            ? t("BUGÜNKÜ ƏHVAL QEYD OLUNDU", "TODAY'S MOOD RECORDED") 
+            : t("BU GÜN NECƏSƏN?", "HOW ARE YOU TODAY?")}
+        </h3>
         <div className="flex justify-between items-center px-2">
           {[
             { id: 'happy', emoji: "😊" },
             { id: 'neutral', emoji: "😐" },
             { id: 'sad', emoji: "😔" },
             { id: 'worried', emoji: "😰" }
-          ].map((m) => (
-            <motion.button
-              key={m.id}
-              onClick={() => handleMoodClick(m.emoji)}
-              whileHover={{ scale: 1.15 }}
-              whileTap={{ scale: 0.9 }}
-              animate={selectedMood === m.emoji ? {
-                scale: [1, 1.05, 1],
-              } : { scale: 1 }}
-              transition={selectedMood === m.emoji ? {
-                scale: { duration: 2, repeat: Infinity, ease: "easeInOut" }
-              } : {}}
-              className={`w-14 h-14 rounded-full flex items-center justify-center text-3xl transition-all relative ${selectedMood === m.emoji ? 'ring-4 ring-teal-brand ring-offset-4 ring-offset-navy/20' : 'bg-white/5'}`}
-            >
-              <span className="z-10">{m.emoji}</span>
-              {selectedMood === m.emoji && (
-                <motion.div
-                  layoutId="moodPulse"
-                  className="absolute inset-0 bg-teal-brand/20 rounded-full z-0"
-                  initial={{ scale: 0.8, opacity: 0 }}
-                  animate={{ scale: 1.4, opacity: 0 }}
-                  transition={{ duration: 1.5, repeat: Infinity, ease: "easeOut" }}
-                />
-              )}
-            </motion.button>
-          ))}
+          ].map((m) => {
+            const todayLabel = new Date().toISOString().split('T')[0];
+            const todayLog = moodLogs.find(l => l.dateLabel === todayLabel);
+            const isSelectedToday = todayLog?.mood === m.emoji;
+            const isAnySelectedToday = !!todayLog;
+
+            return (
+              <motion.button
+                key={m.id}
+                onClick={() => {
+                  if (isAnySelectedToday) return;
+                  setSelectedMoodForCheckin(m.emoji);
+                  setIsDailyModalOpen(true);
+                }}
+                whileHover={isAnySelectedToday ? {} : { scale: 1.15 }}
+                whileTap={isAnySelectedToday ? {} : { scale: 0.9 }}
+                className={`w-14 h-14 rounded-full flex items-center justify-center text-3xl transition-all relative glass ${
+                  isSelectedToday 
+                    ? 'bg-teal-brand/20 ring-2 ring-teal-brand ring-offset-4 ring-offset-transparent' 
+                    : theme === 'dark' ? 'bg-white/5' : 'bg-navy/5'
+                } ${isAnySelectedToday && !isSelectedToday ? 'opacity-20 grayscale cursor-default' : ''}`}
+              >
+                <span className="z-10">{m.emoji}</span>
+              </motion.button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 7-Day Mood History */}
+      <div className={`p-6 rounded-[32px] glass ${theme === 'dark' ? 'glass-dark bg-[#0E1521]' : 'glass-light bg-navy/5'} space-y-6`}>
+        <div className="flex items-center justify-between px-1">
+          <h3 className="text-[11px] font-black uppercase tracking-[0.2em] opacity-60">{t("7 GÜNLÜK ƏHVAL", "7-DAY MOOD")}</h3>
+          <button 
+            onClick={fetchMoodLogs}
+            className="text-[10px] font-black text-teal-brand uppercase tracking-tighter hover:opacity-70 transition-opacity"
+          >
+            {t("YENİLƏ", "REFRESH")}
+          </button>
+        </div>
+
+        <div className="flex justify-between items-end h-24 px-1 gap-2 relative">
+          {/* Days */}
+          {(() => {
+            const days = lang === 'az' 
+              ? ["B.E", "Ç.A", "ÇƏR", "C.A", "CÜM", "ŞNB", "BAZ"]
+              : ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
+            
+            // Generate last 7 days logically
+            const last7Dates = [];
+            for (let i = 6; i >= 0; i--) {
+              const d = new Date();
+              d.setDate(d.getDate() - i);
+              last7Dates.push(d);
+            }
+
+            return last7Dates.map((date, idx) => {
+              const dateLabel = date.toISOString().split('T')[0];
+              const logForDay = moodLogs.find(l => l.dateLabel === dateLabel);
+              const dayName = days[date.getDay() === 0 ? 6 : date.getDay() - 1];
+              
+              // Map mood to position (height)
+              const moodPositions: Record<string, string> = {
+                "😁": "bottom-[42%]",
+                "😊": "bottom-[32%]",
+                "😐": "bottom-[22%]",
+                "😔": "bottom-[12%]",
+                "😭": "bottom-[4%]",
+                "😰": "bottom-[4%]"
+              };
+              
+              const pos = logForDay ? (moodPositions[logForDay.mood] || "bottom-[22%]") : "bottom-0";
+
+              return (
+                <div key={idx} className="flex-1 flex flex-col items-center gap-4">
+                  <div className="relative flex-1 w-full flex items-end justify-center min-h-[100px]">
+                    {/* Base line */}
+                    <div className={`absolute bottom-0 w-8 h-1 rounded-full ${theme === 'dark' ? 'bg-white/10' : 'bg-navy/10'}`} />
+                    
+                    {logForDay && (
+                      <motion.div 
+                        initial={{ opacity: 0, scale: 0.5 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className={`absolute ${pos} flex flex-col items-center gap-1 transition-all duration-500`}
+                      >
+                        <span className="text-sm mb-1">{logForDay.mood}</span>
+                        <div className="w-10 h-10 rounded-full bg-teal-brand shadow-[0_0_15px_rgba(0,212,200,0.3)] flex items-center justify-center opacity-90" />
+                      </motion.div>
+                    )}
+                  </div>
+                  <span className="text-[9px] font-black opacity-30 uppercase tracking-widest">{dayName}</span>
+                </div>
+              );
+            });
+          })()}
         </div>
       </div>
 
       {/* Grid Menu */}
-      <div className="grid grid-cols-2 gap-4 pb-12">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 pb-12">
         {[
           { icon: <ClipboardList size={22} />, label: t("Özünü qiymətləndir", "Self-assess"), color: "bg-orange-brand/10 text-orange-brand", onClick: () => setActiveTab('test') },
+          { icon: <ListTodo size={22} />, label: t("Tapşırıqlar", "Tasks"), color: "bg-blue-500/10 text-blue-400", onClick: () => setActiveTab('tasks') },
           { icon: <UserCheck size={22} />, label: t("Psixoloq tap", "Find psychologist"), color: "bg-teal-brand/10 text-teal-brand", onClick: () => setActiveTab('sessions') },
-          { icon: <Home size={22} />, label: t("Sosial xidmətlər", "Social services"), color: "bg-indigo-500/10 text-indigo-400", onClick: () => setActiveTab('social_services') },
+          { icon: <Building size={22} />, label: t("Sosial xidmətlər", "Social services"), color: "bg-indigo-500/10 text-indigo-400", onClick: () => setActiveTab('social_services') },
           { icon: <BookOpen size={22} />, label: t("Resurslar", "Resources"), color: "bg-purple-500/10 text-purple-400", onClick: () => setActiveTab('resources') }
         ].map((item, idx) => (
           <motion.div
@@ -1597,7 +2086,7 @@ export default function App() {
           </div>
 
           {/* Filtrlər */}
-          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide -mx-1 px-1">
+          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide -mx-1 px-1 md:flex-wrap md:overflow-visible">
             {filters.map((chip) => (
               <button
                 key={chip.id}
@@ -1638,7 +2127,7 @@ export default function App() {
                 <p className="text-[10px] font-bold opacity-40">{t("Dayanıqlı və Operativ Sosial Təminat", "Sustainable and Operative Social Provision")}</p>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               {[
                 { az: "Pensiya sənədləri", en: "Pension docs", icon: "📋" },
                 { az: "Əlillik qeydiyyatı", en: "Disability reg", icon: "💊" },
@@ -1678,65 +2167,67 @@ export default function App() {
               )}
             </h3>
 
-            {filteredServices.length === 0 ? (
-              <div className="py-10 text-center opacity-30">
-                <p className="text-2xl mb-2">🔍</p>
-                <p className="text-xs font-bold">{t("Nəticə tapılmadı", "No results found")}</p>
-              </div>
-            ) : (
-              filteredServices.map((service) => (
-                <div
-                  key={service.id}
-                  className={`p-4 rounded-3xl border space-y-4 active:scale-[0.99] transition-transform ${theme === 'dark' ? 'bg-white/5 border-white/5' : 'bg-navy/5 border-navy/5'}`}
-                >
-                  <div className="flex gap-4">
-                    <div
-                      className="w-14 h-14 rounded-2xl flex items-center justify-center text-3xl shrink-0"
-                      style={{ backgroundColor: `${service.color}15` }}
-                    >
-                      {service.icon}
-                    </div>
-                    <div className="flex-1 space-y-1 min-w-0">
-                      <div className="flex justify-between items-start gap-2">
-                        <h4 className="text-sm font-black">{t(service.az, service.en)}</h4>
-                        <span
-                          className="text-[9px] font-black px-2 py-0.5 rounded-full shrink-0"
-                          style={{ backgroundColor: `${service.color}20`, color: service.color }}
-                        >
-                          {t(service.countAz, service.countEn)}
-                        </span>
-                      </div>
-                      <p className="text-[11px] font-bold opacity-40 leading-snug">{t(service.descAz, service.descEn)}</p>
-                    </div>
-                  </div>
-
-                  {/* Düymələr — indi işlək */}
-                  <div className={`flex gap-2 pt-1 border-t ${theme === 'dark' ? 'border-white/5' : 'border-navy/5'}`}>
-                    <button
-                      onClick={() => makeCall(service.phone)}
-                      className={`flex-1 py-2.5 rounded-xl text-[10px] font-black flex items-center justify-center gap-1.5 active:scale-95 transition-all ${theme === 'dark' ? 'bg-white/5 hover:bg-white/10' : 'bg-navy/5 hover:bg-navy/10'}`}
-                    >
-                      <Phone size={12} />
-                      {t("Zəng", "Call")}
-                    </button>
-                    <button
-                      onClick={() => openMap(service.mapQuery)}
-                      className={`flex-1 py-2.5 rounded-xl text-[10px] font-black flex items-center justify-center gap-1.5 active:scale-95 transition-all ${theme === 'dark' ? 'bg-white/5 hover:bg-white/10' : 'bg-navy/5 hover:bg-navy/10'}`}
-                    >
-                      <MapPin size={12} />
-                      {t("Xəritə", "Map")}
-                    </button>
-                    <button
-                      onClick={() => setSelectedService(service)}
-                      className={`flex-1 py-2.5 rounded-xl text-[10px] font-black flex items-center justify-center gap-1.5 active:scale-95 transition-all ${theme === 'dark' ? 'bg-white/5 hover:bg-white/10' : 'bg-navy/5 hover:bg-navy/10'}`}
-                    >
-                      <Info size={12} />
-                      {t("Ətraflı", "More")}
-                    </button>
-                  </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {filteredServices.length === 0 ? (
+                <div className="col-span-full py-10 text-center opacity-30">
+                  <p className="text-2xl mb-2">🔍</p>
+                  <p className="text-xs font-bold">{t("Nəticə tapılmadı", "No results found")}</p>
                 </div>
-              ))
-            )}
+              ) : (
+                filteredServices.map((service) => (
+                  <div
+                    key={service.id}
+                    className={`p-4 rounded-3xl border space-y-4 active:scale-[0.99] transition-transform ${theme === 'dark' ? 'bg-white/5 border-white/5' : 'bg-navy/5 border-navy/5'}`}
+                  >
+                    <div className="flex gap-4">
+                      <div
+                        className="w-14 h-14 rounded-2xl flex items-center justify-center text-3xl shrink-0"
+                        style={{ backgroundColor: `${service.color}15` }}
+                      >
+                        {service.icon}
+                      </div>
+                      <div className="flex-1 space-y-1 min-w-0">
+                        <div className="flex justify-between items-start gap-2">
+                          <h4 className="text-sm font-black">{t(service.az, service.en)}</h4>
+                          <span
+                            className="text-[9px] font-black px-2 py-0.5 rounded-full shrink-0"
+                            style={{ backgroundColor: `${service.color}20`, color: service.color }}
+                          >
+                            {t(service.countAz, service.countEn)}
+                          </span>
+                        </div>
+                        <p className="text-[11px] font-bold opacity-40 leading-snug">{t(service.descAz, service.descEn)}</p>
+                      </div>
+                    </div>
+
+                    {/* Düymələr — indi işlək */}
+                    <div className={`flex gap-2 pt-1 border-t ${theme === 'dark' ? 'border-white/5' : 'border-navy/5'}`}>
+                      <button
+                        onClick={() => makeCall(service.phone)}
+                        className={`flex-1 py-2.5 rounded-xl text-[10px] font-black flex items-center justify-center gap-1.5 active:scale-95 transition-all ${theme === 'dark' ? 'bg-white/5 hover:bg-white/10' : 'bg-navy/5 hover:bg-navy/10'}`}
+                      >
+                        <Phone size={12} />
+                        {t("Zəng", "Call")}
+                      </button>
+                      <button
+                        onClick={() => openMap(service.mapQuery)}
+                        className={`flex-1 py-2.5 rounded-xl text-[10px] font-black flex items-center justify-center gap-1.5 active:scale-95 transition-all ${theme === 'dark' ? 'bg-white/5 hover:bg-white/10' : 'bg-navy/5 hover:bg-navy/10'}`}
+                      >
+                        <MapPin size={12} />
+                        {t("Xəritə", "Map")}
+                      </button>
+                      <button
+                        onClick={() => setSelectedService(service)}
+                        className={`flex-1 py-2.5 rounded-xl text-[10px] font-black flex items-center justify-center gap-1.5 active:scale-95 transition-all ${theme === 'dark' ? 'bg-white/5 hover:bg-white/10' : 'bg-navy/5 hover:bg-navy/10'}`}
+                      >
+                        <Info size={12} />
+                        {t("Ətraflı", "More")}
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
 
           <div className="h-6" />
@@ -1838,42 +2329,44 @@ export default function App() {
         )}
       </div>
 
-      {testResults.length === 0 ? (
-        <div className="py-20 text-center space-y-4">
-          <div className={`w-16 h-16 mx-auto rounded-full flex items-center justify-center text-2xl glass ${theme === 'dark' ? 'glass-dark' : 'glass-light'}`}>📊</div>
-          <p className="text-xs opacity-50 font-bold">{t("Hələ ki heç bir test nəticəsi yoxdur.", "No test results yet.")}</p>
-        </div>
-      ) : (
-        testResults.map(res => (
-          <div key={res.id} className={`rounded-3xl overflow-hidden glass ${theme === 'dark' ? 'glass-dark' : 'glass-light'}`}>
-            <div className="p-4 flex items-center justify-between border-b border-navy/5 dark:border-white/5">
-              <div className="flex items-center gap-4">
-                <div className={`w-12 h-12 rounded-full border-4 ${res.score > 75 ? 'border-teal-brand/40 text-teal-brand' : res.score > 45 ? 'border-orange-brand/40 text-orange-brand' : 'border-red-500/40 text-red-500'} flex items-center justify-center font-black text-xs shadow-inner`}>
-                  {res.score}
-                </div>
-                <div>
-                  <h4 className="text-xs font-bold leading-none mb-1">{res.mood} {t("Psixoloji Vəziyyət", "Psychological State")}</h4>
-                  <p className="text-[10px] opacity-40 font-bold tracking-tight">{res.date}</p>
-                </div>
-              </div>
-              <button 
-                onClick={() => removeResult(res.id)}
-                className="w-8 h-8 rounded-full flex items-center justify-center text-red-500/40 hover:text-red-500 transition-colors"
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
-            <div className="p-4 relative">
-              <div className="mb-2">
-                <span className="text-[9px] font-black uppercase tracking-[0.15em] text-orange-brand leading-none">{t("AIDLY MƏSLƏHƏTİ", "AIDLY ADVICE")}</span>
-              </div>
-              <p className={`text-[11px] leading-relaxed font-bold italic tracking-tight ${theme === 'light' ? 'text-navy' : 'text-white'}`}>
-                {res.advice}
-              </p>
-            </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {testResults.length === 0 ? (
+          <div className="col-span-full py-20 text-center space-y-4">
+            <div className={`w-16 h-16 mx-auto rounded-full flex items-center justify-center text-2xl glass ${theme === 'dark' ? 'glass-dark' : 'glass-light'}`}>📊</div>
+            <p className="text-xs opacity-50 font-bold">{t("Hələ ki heç bir test nəticəsi yoxdur.", "No test results yet.")}</p>
           </div>
-        ))
-      )}
+        ) : (
+          testResults.map(res => (
+            <div key={res.id} className={`rounded-3xl overflow-hidden glass ${theme === 'dark' ? 'glass-dark' : 'glass-light'}`}>
+              <div className="p-4 flex items-center justify-between border-b border-navy/5 dark:border-white/5">
+                <div className="flex items-center gap-4">
+                  <div className={`w-12 h-12 rounded-full border-4 ${res.score > 75 ? 'border-teal-brand/40 text-teal-brand' : res.score > 45 ? 'border-orange-brand/40 text-orange-brand' : 'border-red-500/40 text-red-500'} flex items-center justify-center font-black text-xs shadow-inner`}>
+                    {res.score}
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold leading-none mb-1">{res.mood} {t("Psixoloji Vəziyyət", "Psychological State")}</h4>
+                    <p className="text-[10px] opacity-40 font-bold tracking-tight">{res.date}</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => removeResult(res.id)}
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-red-500/40 hover:text-red-500 transition-colors"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+              <div className="p-4 relative">
+                <div className="mb-2">
+                  <span className="text-[9px] font-black uppercase tracking-[0.15em] text-orange-brand leading-none">{t("AIDLY MƏSLƏHƏTİ", "AIDLY ADVICE")}</span>
+                </div>
+                <p className={`text-[11px] leading-relaxed font-bold italic tracking-tight ${theme === 'light' ? 'text-navy' : 'text-white'}`}>
+                  {res.advice}
+                </p>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
     </div>
   );
 
@@ -1961,7 +2454,7 @@ export default function App() {
               <button
                 onClick={() => {
                   setSelectedArticle(null);
-                  setActiveTab('chat');
+                  setActiveTab('sessions');
                 }}
                 className="w-full py-3 rounded-2xl bg-teal-brand text-navy font-black text-xs active:scale-95 transition-transform flex items-center justify-center gap-2"
               >
@@ -2065,7 +2558,7 @@ export default function App() {
         </div>
 
         {/* Kateqoriyalar */}
-        <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+        <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide md:flex-wrap md:overflow-visible">
           {categories.map((cat) => (
             <button
               key={cat.id}
@@ -2112,65 +2605,67 @@ export default function App() {
             <span className="text-teal-brand normal-case tracking-normal">({filteredArticles.length})</span>
           </h3>
 
-          {filteredArticles.length === 0 ? (
-            <div className="py-12 text-center space-y-2 opacity-30">
-              <p className="text-3xl">📚</p>
-              <p className="text-xs font-black">{t("Məqalə tapılmadı", "No articles found")}</p>
-            </div>
-          ) : (
-            filteredArticles.map((article: any, idx: number) => (
-              <div
-                key={article.id}
-                onClick={() => openArticle(article)}
-                className={`flex gap-4 p-3 rounded-3xl border hover:opacity-80 transition-colors cursor-pointer group active:scale-[0.98] ${theme === 'dark' ? 'bg-white/5 border-white/5' : 'bg-navy/5 border-navy/5'}`}
-              >
-                {/* Şəkil */}
-                <div className="w-20 h-20 rounded-2xl overflow-hidden shrink-0 ring-1 ring-white/10 relative">
-                  <img
-                    src={article.img}
-                    alt={article.titleAz}
-                    className="w-full h-full object-cover group-hover:scale-110 transition-transform"
-                    referrerPolicy="no-referrer"
-                  />
-                  {readArticles.includes(article.id) && (
-                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                      <CheckCircle size={20} className="text-teal-brand" />
-                    </div>
-                  )}
-                </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {filteredArticles.length === 0 ? (
+              <div className="col-span-full py-12 text-center space-y-2 opacity-30">
+                <p className="text-3xl">📚</p>
+                <p className="text-xs font-black">{t("Məqalə tapılmadı", "No articles found")}</p>
+              </div>
+            ) : (
+              filteredArticles.map((article: any, idx: number) => (
+                <div
+                  key={article.id}
+                  onClick={() => openArticle(article)}
+                  className={`flex gap-4 p-3 rounded-3xl border hover:opacity-80 transition-colors cursor-pointer group active:scale-[0.98] ${theme === 'dark' ? 'bg-white/5 border-white/5' : 'bg-navy/5 border-navy/5'}`}
+                >
+                  {/* Şəkil */}
+                  <div className="w-20 h-20 rounded-2xl overflow-hidden shrink-0 ring-1 ring-white/10 relative">
+                    <img
+                      src={article.img}
+                      alt={article.titleAz}
+                      className="w-full h-full object-cover group-hover:scale-110 transition-transform"
+                      referrerPolicy="no-referrer"
+                    />
+                    {readArticles.includes(article.id) && (
+                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                        <CheckCircle size={20} className="text-teal-brand" />
+                      </div>
+                    )}
+                  </div>
 
-                {/* Mətn */}
-                <div className="flex flex-col justify-center gap-1 flex-1 min-w-0">
-                  <span className="text-[9px] font-black text-teal-brand uppercase tracking-widest">
-                    {t(article.category, article.category)}
-                  </span>
-                  <h4 className="text-[13px] font-black leading-tight line-clamp-2">
-                    {t(article.titleAz, article.titleEn)}
-                  </h4>
-                  <div className="flex items-center justify-between mt-1">
-                    <div className="flex items-center gap-1 text-[9px] font-bold opacity-30">
-                      <Clock size={10} />
-                      <span>{article.time} {t("dəq", "min")}</span>
+                  {/* Mətn */}
+                  <div className="flex flex-col justify-center gap-1 flex-1 min-w-0">
+                    <span className="text-[9px] font-black text-teal-brand uppercase tracking-widest">
+                      {t(article.category, article.category)}
+                    </span>
+                    <h4 className="text-[13px] font-black leading-tight line-clamp-2">
+                      {t(article.titleAz, article.titleEn)}
+                    </h4>
+                    <div className="flex items-center justify-between mt-1">
+                      <div className="flex items-center gap-1 text-[9px] font-bold opacity-30">
+                        <Clock size={10} />
+                        <span>{article.time} {t("dəq", "min")}</span>
+                      </div>
+                      <button
+                        onClick={(e) => toggleSave(e, article.id)}
+                        className={`w-7 h-7 rounded-full flex items-center justify-center transition-all active:scale-90 ${
+                          savedArticles.includes(article.id)
+                            ? 'text-teal-brand'
+                            : 'opacity-20 hover:opacity-60'
+                        }`}
+                      >
+                        <Bookmark size={14} fill={savedArticles.includes(article.id) ? 'currentColor' : 'none'} />
+                      </button>
                     </div>
-                    <button
-                      onClick={(e) => toggleSave(e, article.id)}
-                      className={`w-7 h-7 rounded-full flex items-center justify-center transition-all active:scale-90 ${
-                        savedArticles.includes(article.id)
-                          ? 'text-teal-brand'
-                          : 'opacity-20 hover:opacity-60'
-                      }`}
-                    >
-                      <Bookmark size={14} fill={savedArticles.includes(article.id) ? 'currentColor' : 'none'} />
-                    </button>
                   </div>
                 </div>
-              </div>
-            ))
-          )}
+              ))
+            )}
+          </div>
         </div>
 
         {/* Video / Podcast */}
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <button
             onClick={() => window.open('https://www.youtube.com/results?search_query=psixologiya+azerbaycan', '_blank')}
             className="p-5 rounded-[32px] bg-teal-brand/10 border border-teal-brand/20 space-y-3 text-left active:scale-95 transition-transform"
@@ -2413,6 +2908,225 @@ export default function App() {
     );
   };
 
+  const renderTasks = () => {
+    const PRIORITY_CONFIG: Record<string, { label: string; icon: React.ReactNode; color: string }> = {
+      high:   { label: t("Yüksək", "High"), icon: <Flame size={12} />,    color: "text-red-400 bg-red-400/10" },
+      medium: { label: t("Orta", "Medium"),   icon: <Minus size={12} />,    color: "text-yellow-400 bg-yellow-400/10" },
+      low:    { label: t("Aşağı", "Low"),  icon: <ArrowDown size={12} />, color: "text-teal-400 bg-teal-400/10" },
+    };
+
+    const CATEGORY_CONFIG: Record<string, { label: string; emoji: string }> = {
+      personal: { label: t("Şəxsi", "Personal"),     emoji: "👤" },
+      work:     { label: t("İş", "Work"),        emoji: "💼" },
+      health:   { label: t("Sağlamlıq", "Health"), emoji: "💚" },
+      other:    { label: t("Digər", "Other"),     emoji: "📌" },
+    };
+
+    const activeTasks = tasks.filter(t => !t.completed);
+    const doneTasks   = tasks.filter(t =>  t.completed);
+
+    const TaskCard = ({ task }: { task: Task, key?: string }) => {
+      const pCfg = PRIORITY_CONFIG[task.priority] || PRIORITY_CONFIG.medium;
+      const cCfg = CATEGORY_CONFIG[task.category] || CATEGORY_CONFIG.other;
+
+      return (
+        <motion.div
+          layout
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className={`p-5 rounded-[28px] border transition-all duration-200 ${
+            task.completed
+              ? "bg-white/3 border-white/5 opacity-60"
+              : `glass ${theme === 'dark' ? 'glass-dark bg-[#0E1521] border-white/10' : 'glass-light bg-white border-navy/5'} hover:border-teal-brand/30`
+          }`}
+        >
+          <div className="flex items-start gap-4">
+            <button
+              onClick={() => toggleTask(task.id, task.completed)}
+              className={`mt-0.5 flex-shrink-0 transition-colors ${
+                task.completed ? "text-teal-brand" : "text-white/30 hover:text-white/60"
+              }`}
+            >
+              {task.completed ? <CheckCircle size={20} /> : <Circle size={20} />}
+            </button>
+
+            <div className="flex-1 min-w-0">
+              <h4 className={`text-sm font-black leading-snug ${
+                task.completed ? "line-through opacity-40" : ""
+              }`}>
+                {task.title}
+              </h4>
+
+              <div className="flex items-center gap-2 mt-2 flex-wrap">
+                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${pCfg.color}`}>
+                  {pCfg.icon}
+                  {pCfg.label}
+                </span>
+                <span className="text-[10px] font-bold opacity-30">
+                  {cCfg.emoji} {cCfg.label}
+                </span>
+                {task.dueDate && (
+                  <span className="text-[10px] font-bold opacity-30 flex items-center gap-1">
+                    <Calendar size={10} />
+                    {task.dueDate}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <button
+              onClick={() => deleteTask(task.id)}
+              className="text-red-400/50 hover:text-red-400 transition-colors flex-shrink-0 p-1"
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
+        </motion.div>
+      );
+    };
+
+    return (
+      <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-24">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-2xl font-black tracking-tight">{t("Tapşırıqlar", "Tasks")}</h2>
+            <p className="text-xs font-bold opacity-40">{t("Gündəlik hədəf və planlarınız", "Your daily goals and plans")}</p>
+          </div>
+          <motion.button
+            onClick={() => setIsTaskModalOpen(true)}
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            className="w-12 h-12 rounded-2xl bg-teal-brand text-navy flex items-center justify-center shadow-lg shadow-teal-brand/20"
+          >
+            <Sparkles size={20} />
+          </motion.button>
+        </div>
+
+        {tasks.length === 0 ? (
+          <div className={`p-12 rounded-[40px] text-center space-y-4 glass ${theme === 'dark' ? 'bg-white/5' : 'bg-navy/5'}`}>
+            <div className="w-16 h-16 rounded-full bg-teal-brand/10 text-teal-brand flex items-center justify-center mx-auto">
+              <ListTodo size={32} />
+            </div>
+            <p className="text-xs font-bold opacity-40 uppercase tracking-widest">{t("Heç bir tapşırıq yoxdur", "No tasks yet")}</p>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {activeTasks.length > 0 && (
+              <div className="space-y-3">
+                <AnimatePresence mode="popLayout">
+                  {activeTasks.map(task => <TaskCard key={task.id} task={task} />)}
+                </AnimatePresence>
+              </div>
+            )}
+
+            {doneTasks.length > 0 && (
+              <div className="space-y-3">
+                <p className="text-[10px] font-black opacity-30 uppercase tracking-[0.2em] px-1">
+                  {t("TAMAMLANMIŞ", "DONE")} · {doneTasks.length}
+                </p>
+                <AnimatePresence mode="popLayout">
+                  {doneTasks.map(task => <TaskCard key={task.id} task={task} />)}
+                </AnimatePresence>
+              </div>
+            )}
+          </div>
+        )}
+
+        <AnimatePresence>
+          {isTaskModalOpen && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[300] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/60 backdrop-blur-md"
+              onClick={() => setIsTaskModalOpen(false)}
+            >
+              <motion.div
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ type: "spring", damping: 25, stiffness: 300 }}
+                className={`w-full max-w-lg rounded-t-[40px] sm:rounded-[40px] p-8 space-y-6 border shadow-2xl ${theme === 'dark' ? 'bg-[#0E1521] border-white/10' : 'bg-white border-navy/10'}`}
+                onClick={e => e.stopPropagation()}
+              >
+                <div className="flex justify-between items-center">
+                  <h3 className="text-xl font-black">{t("Yeni Tapşırıq", "New Task")}</h3>
+                  <button onClick={() => setIsTaskModalOpen(false)} className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center opacity-40 hover:opacity-100 transition-opacity">
+                    <X size={20} />
+                  </button>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest opacity-40 ml-1">{t("Nə etməlisən?", "What to do?")}</label>
+                    <input
+                      type="text"
+                      value={newTaskTitle}
+                      onChange={(e) => setNewTaskTitle(e.target.value)}
+                      placeholder={t("Məsələn: 10 dəqiqə meditasiya", "e.g. 10 min meditation")}
+                      className={`w-full p-4 rounded-2xl text-sm font-bold border outline-none focus:border-teal-brand/50 transition-all ${theme === 'dark' ? 'bg-white/5 border-white/10' : 'bg-navy/5 border-navy/10'}`}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black uppercase tracking-widest opacity-40 ml-1">{t("Son tarix", "Due date")}</label>
+                      <input
+                        type="date"
+                        value={newTaskDueDate}
+                        onChange={(e) => setNewTaskDueDate(e.target.value)}
+                        className={`w-full p-4 rounded-2xl text-xs font-bold border outline-none focus:border-teal-brand/50 transition-all ${theme === 'dark' ? 'bg-white/5 border-white/10' : 'bg-navy/5 border-navy/10'}`}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black uppercase tracking-widest opacity-40 ml-1">{t("Prioritet", "Priority")}</label>
+                      <select
+                        value={newTaskPriority}
+                        onChange={(e: any) => setNewPriority(e.target.value)}
+                        className={`w-full p-4 rounded-2xl text-xs font-bold border outline-none appearance-none focus:border-teal-brand/50 transition-all ${theme === 'dark' ? 'bg-white/5 border-white/10' : 'bg-navy/5 border-navy/10'}`}
+                      >
+                        <option value="high">{t("Yüksək", "High")}</option>
+                        <option value="medium">{t("Orta", "Medium")}</option>
+                        <option value="low">{t("Aşağı", "Low")}</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest opacity-40 ml-1">{t("Kateqoriya", "Category")}</label>
+                    <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+                      {(["personal", "work", "health", "other"] as const).map(c => (
+                        <button
+                          key={c}
+                          onClick={() => setNewCategory(c)}
+                          className={`flex-1 py-3 px-4 rounded-xl text-[10px] font-black whitespace-nowrap transition-all ${
+                            newTaskCategory === c
+                              ? "bg-teal-brand text-navy shadow-lg shadow-teal-brand/20"
+                              : theme === 'dark' ? 'bg-white/5 text-white/40' : 'bg-navy/5 text-navy/40'
+                          }`}
+                        >
+                          {CATEGORY_CONFIG[c].emoji} {CATEGORY_CONFIG[c].label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={addTask}
+                    disabled={!newTaskTitle || isTaskSaving}
+                    className="w-full py-5 rounded-2xl bg-teal-brand text-navy text-xs font-black uppercase tracking-[0.2em] shadow-lg shadow-teal-brand/30 disabled:opacity-30 transition-all active:scale-95"
+                  >
+                    {isTaskSaving ? t("ƏLAVƏ EDİLİR...", "ADDING...") : t("ƏLAVƏ ET", "ADD TASK")}
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  };
+
   const renderSettings = () => (
     <div className="p-4 space-y-6 relative">
       {/* Delete Confirmation Modal */}
@@ -2444,10 +3158,22 @@ export default function App() {
               </div>
               <div className="space-y-3">
                 <button 
-                  onClick={() => {
-                    // Logic to delete account would go here
-                    setShowDeleteModal(false);
-                    alert(t("Hesab silindi.", "Account deleted."));
+                  onClick={async () => {
+                    if (auth.currentUser) {
+                      try {
+                        await deleteUser(auth.currentUser);
+                        setShowDeleteModal(false);
+                        handleSignOut();
+                        alert(t("Hesab uğurla silindi.", "Account successfully deleted."));
+                      } catch (err: any) {
+                        console.error("Account deletion error:", err);
+                        if (err.code === 'auth/requires-recent-login') {
+                          alert(t("Bu əməliyyat üçün yenidən daxil olmalısınız.", "You need to re-authenticate for this operation."));
+                        } else {
+                          alert(t("Hesab silinərkən xəta baş verdi.", "Error deleting account."));
+                        }
+                      }
+                    }
                   }}
                   className="w-full py-4 rounded-2xl bg-red-500 text-white text-xs font-black uppercase tracking-[0.1em] active:scale-95 transition-transform"
                 >
@@ -2641,6 +3367,31 @@ export default function App() {
           </button>
         </div>
 
+        <div className="p-4 flex items-center justify-between border-t border-navy/5 dark:border-white/5">
+          <div className="flex items-center gap-3">
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center glass shadow-inner ${theme === 'dark' ? 'bg-white/10' : 'bg-navy/5'}`}>
+              <Lock size={14} />
+            </div>
+            <span className="text-sm font-bold tracking-tight">{t("Şifrəni Sıfırla", "Reset Password")}</span>
+          </div>
+          <button 
+            onClick={async () => {
+              if (user?.email) {
+                try {
+                  await sendPasswordResetEmail(auth, user.email);
+                  alert(t("Şifrə yeniləmə linki e-poçtunuza göndərildi.", "Password reset link sent to your email."));
+                } catch (err: any) {
+                  alert(t("Xəta baş verdi: ", "An error occurred: ") + err.message);
+                }
+              }
+            }}
+            disabled={user?.isAnonymous}
+            className="px-4 py-1.5 rounded-xl bg-teal-brand/10 text-teal-brand text-[10px] font-black uppercase tracking-widest hover:bg-teal-brand/20 transition-colors disabled:opacity-30"
+          >
+            {t("GÖNDƏR", "SEND LINK")}
+          </button>
+        </div>
+
         <button 
           onClick={handleSignOut}
           className="w-full flex items-center justify-between p-4 rounded-3xl group mt-4 text-red-400"
@@ -2709,7 +3460,7 @@ export default function App() {
               className={`p-4 rounded-3xl border flex flex-col gap-3 group ${theme === 'dark' ? 'bg-white/5 border-white/5 hover:border-teal-brand/30' : 'bg-navy/5 border-navy/5 hover:border-teal-brand/30'} transition-all`}
             >
               <div className="flex items-center gap-3">
-                <img src={session.avatar} alt={session.psychNameAz} className="w-10 h-10 rounded-full object-cover" />
+                <img src={session.avatar} alt={session.psychNameAz} className="w-10 h-10 rounded-full object-cover" referrerPolicy="no-referrer" />
                 <div className="flex-1">
                   <h4 className="text-xs font-black">{lang === 'az' ? session.psychNameAz : session.psychNameEn}</h4>
                   <p className="text-[9px] font-bold opacity-50">{session.date} • {session.time}</p>
@@ -2760,7 +3511,7 @@ export default function App() {
                 className="bg-rose-500 text-white text-[10px] font-black uppercase tracking-[0.2em] py-2 px-4 flex items-center justify-center gap-2 z-[130] shrink-0"
               >
                 <AlertCircle size={12} />
-                Oflayn rejimdəsiniz
+                {t("Oflayn rejimdəsiniz", "You are offline")}
               </motion.div>
             )}
           </AnimatePresence>
@@ -2789,6 +3540,7 @@ export default function App() {
                   {activeTab === 'feedback' && renderFeedback()}
                   {activeTab === 'social_services' && renderSocialServices()}
                   {activeTab === 'resources' && renderResources()}
+                  {activeTab === 'tasks' && renderTasks()}
                   {activeTab === 'past_chats' && renderPastChats()}
                 </motion.div>
               </AnimatePresence>
@@ -2798,6 +3550,7 @@ export default function App() {
             <div className={`absolute bottom-0 left-0 right-0 h-24 pb-8 flex items-center justify-around px-2 glass z-30 ${theme === 'dark' ? 'glass-dark bg-[#0A0C10]/95 border-t border-white/5' : 'glass-light bg-white/95 shadow-[0_-10px_30px_rgba(0,0,0,0.05)]'}`}>
               {[
                 { id: 'home', icon: Home, label: t("Ana Səhifə", "Home") },
+                { id: 'tasks', icon: ListTodo, label: t("Tapşırıqlar", "Tasks") },
                 { id: 'social_services', icon: Building, label: t("Xidmətlər", "Services") },
                 { id: 'sessions', icon: Heart, label: t("Mütəxəssis", "Expert") },
                 { id: 'resources', icon: BookOpen, label: t("Resurslar", "Resources") },
@@ -2837,7 +3590,10 @@ export default function App() {
                 animate={{ scale: 1, y: 0 }}
                 whileHover={{ scale: 1.1, rotate: 5 }}
                 whileTap={{ scale: 0.9 }}
-                onClick={() => startChat(PSYCHOLOGISTS[0].id)}
+                onClick={() => {
+                  addSession(PSYCHOLOGISTS[0]);
+                  startChat(PSYCHOLOGISTS[0].id);
+                }}
                 className="absolute bottom-28 right-6 w-14 h-14 rounded-full bg-gradient-to-tr from-teal-brand to-[#00A89F] text-navy flex items-center justify-center shadow-[0_10px_30px_rgba(0,212,200,0.4)] z-40"
               >
                 <Sparkles size={24} className="animate-pulse" />
@@ -2847,6 +3603,65 @@ export default function App() {
 
             {/* MODALS & OVERLAYS */}
             <AnimatePresence>
+              {isDailyModalOpen && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md"
+                  onClick={() => setIsDailyModalOpen(false)}
+                >
+                  <motion.div
+                    initial={{ scale: 0.9, y: 20 }}
+                    animate={{ scale: 1, y: 0 }}
+                    exit={{ scale: 0.9, y: 20 }}
+                    className={`w-full max-w-sm rounded-[40px] p-8 space-y-8 border text-center shadow-2xl ${theme === 'dark' ? 'bg-[#0E1521] border-white/10' : 'bg-white border-navy/10'}`}
+                    onClick={e => e.stopPropagation()}
+                  >
+                    <div className="space-y-1">
+                      <p className="text-[10px] font-black uppercase tracking-[0.2em] opacity-40">{t("GÜNLÜK YOXLAMA", "DAILY CHECK-IN")}</p>
+                      <h3 className="text-2xl font-black">{t("Bu gün necəsən?", "How are you today?")}</h3>
+                    </div>
+
+                    <div className="flex justify-between items-center gap-2">
+                      {[
+                        { emoji: "😭", labelAz: "ÇOX PİS", labelEn: "VERY BAD" },
+                        { emoji: "😔", labelAz: "PİS", labelEn: "BAD" },
+                        { emoji: "😐", labelAz: "NORMAL", labelEn: "NORMAL" },
+                        { emoji: "😊", labelAz: "YAXŞI", labelEn: "GOOD" },
+                        { emoji: "😁", labelAz: "ƏLA", labelEn: "EXCELLENT" }
+                      ].map((m) => (
+                        <button
+                          key={m.emoji}
+                          onClick={() => setSelectedMoodForCheckin(m.emoji)}
+                          className={`flex flex-col items-center gap-2 flex-1 transition-all ${selectedMoodForCheckin === m.emoji ? 'scale-110 opacity-100' : 'opacity-40 grayscale hover:grayscale-0 hover:opacity-100'}`}
+                        >
+                          <span className="text-3xl">{m.emoji}</span>
+                          <span className="text-[7px] font-black uppercase tracking-widest">{t(m.labelAz, m.labelEn)}</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="space-y-4">
+                      <input
+                        type="text"
+                        value={moodNote}
+                        onChange={(e) => setMoodNote(e.target.value)}
+                        placeholder={t("Qısa qeyd... (istəyə bağlı)", "Short note... (optional)")}
+                        className={`w-full p-4 rounded-2xl text-[11px] font-bold border transition-all focus:border-teal-brand/50 outline-none ${theme === 'dark' ? 'bg-white/5 border-white/10' : 'bg-navy/5 border-navy/10'}`}
+                      />
+                      <button
+                        onClick={saveMoodLog}
+                        disabled={!selectedMoodForCheckin}
+                        className="w-full py-4 rounded-2xl bg-teal-brand text-navy text-xs font-black uppercase tracking-[0.2em] shadow-lg shadow-teal-brand/20 disabled:opacity-30 disabled:shadow-none active:scale-95 transition-all"
+                      >
+                        {t("SAXLA", "SAVE")}
+                      </button>
+                    </div>
+                  </motion.div>
+                </motion.div>
+              )}
+
               {isChatOpen && (
                 <motion.div 
                   initial={{ opacity: 0 }}
@@ -2858,84 +3673,109 @@ export default function App() {
                     initial={{ y: "100%" }}
                     animate={{ y: 0 }}
                     exit={{ y: "100%" }}
-                    transition={{ type: "spring", damping: 30, stiffness: 300 }}
-                    className={`w-full h-[95%] rounded-t-[40px] flex flex-col shadow-2xl relative glass ${theme === 'dark' ? 'glass-dark bg-navy/95 border-t border-white/20' : 'glass-light bg-white/95 border-t border-navy/10'}`}
+                    transition={{ type: "spring", damping: 32, stiffness: 300 }}
+                    className={`w-full h-[92%] rounded-t-[32px] flex flex-col shadow-2xl relative overflow-hidden ${theme === 'dark' ? 'bg-[#0A0C10]' : 'bg-white'}`}
                   >
                     {/* Chat Header */}
-                    <div className="p-4 flex items-center justify-between border-b border-navy/5 dark:border-white/5">
+                    <div className={`px-6 py-4 flex items-center justify-between border-b shrink-0 ${theme === 'dark' ? 'bg-[#0A0C10] border-white/5' : 'bg-white border-gray-100'}`}>
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-teal-brand/10 glass glass-dark flex items-center justify-center text-teal-brand">
-                          <MessageCircle size={18} />
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center ${theme === 'dark' ? 'bg-yellow-400/20 text-yellow-500' : 'bg-yellow-400/10 text-yellow-600'}`}>
+                          <Sparkles size={20} />
                         </div>
                         <div>
-                          <h3 className="text-[10px] font-black uppercase tracking-widest">{t("AI Məsləhətçi", "AI Counselor")}</h3>
-                          <p className="text-[8px] opacity-50 flex items-center gap-1 font-black">
-                            <span className="w-1 h-1 bg-green-500 rounded-full animate-pulse" />
-                            {t("AI aktivdir", "AI is active")}
-                          </p>
+                          <h3 className={`text-base font-black tracking-tight ${theme === 'dark' ? 'text-white' : 'text-navy'}`}>{t("Aidly AI Köməkçisi", "Aidly AI Assistant")}</h3>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
                         <button 
-                          onClick={clearChatMessages}
-                          className="w-8 h-8 rounded-full flex items-center justify-center bg-red-500/10 text-red-500 hover:bg-red-500/20"
-                          title={t("Tarixçəni təmizlə", "Clear History")}
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                        <button 
                           onClick={() => {
-                            setIsAiVoiceEnabled(!isAiVoiceEnabled);
-                            localStorage.setItem('aidly_voice_enabled', String(!isAiVoiceEnabled));
+                            const newState = !isAiVoiceEnabled;
+                            setIsAiVoiceEnabled(newState);
+                            localStorage.setItem('aidly_voice_enabled', String(newState));
+                            if (!newState) window.speechSynthesis.cancel();
                           }}
-                          className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${isAiVoiceEnabled ? 'bg-teal-brand text-navy' : 'bg-white/5'}`}
+                          className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${isAiVoiceEnabled ? 'bg-teal-brand/10 text-teal-brand' : theme === 'dark' ? 'bg-white/5 text-gray-500' : 'bg-gray-50 text-gray-400'}`}
                         >
-                          {isAiVoiceEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
+                          {isAiVoiceEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
                         </button>
                         <button 
                           onClick={handleCloseChat}
-                          className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center hover:bg-white/10"
+                          className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors ${theme === 'dark' ? 'bg-white/5 text-gray-500 hover:bg-white/10' : 'bg-gray-50 text-gray-400 hover:bg-gray-100'}`}
                         >
-                          <X size={18} />
+                          <X size={22} />
                         </button>
                       </div>
                     </div>
 
                     {/* Chat Messages */}
-                    <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-hide">
-                      {chatMessages.map((msg) => (
+                    <div className={`flex-1 overflow-y-auto p-5 space-y-6 scrollbar-hide ${theme === 'dark' ? 'bg-[#0A0C10]' : 'bg-[#F8FAFF]'}`}>
+                      {chatMessages.map((msg, idx) => (
                         <motion.div
                           key={msg.id}
-                          initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                          animate={{ opacity: 1, y: 0, scale: 1 }}
-                          className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} items-end gap-2`}
                         >
-                          <div className={`max-w-[85%] p-4 rounded-3xl text-xs font-bold leading-relaxed ${
-                            msg.role === 'user' 
-                              ? 'bg-teal-brand text-navy rounded-tr-none' 
-                              : theme === 'dark' ? 'bg-white/5 text-white rounded-tl-none border border-white/5' : 'bg-navy/5 text-navy rounded-tl-none border border-navy/5'
-                          }`}>
-                            {msg.content}
-                            {msg.detectedEmotion && (
-                              <div className={`mt-2 pt-2 border-t text-[8px] font-black uppercase tracking-widest ${
-                                msg.detectedEmotion === 'crisis' || msg.detectedEmotion === 'böhran' 
-                                  ? 'text-red-400 border-red-500/20 animate-pulse font-black' 
-                                  : 'border-black/5 opacity-50'
-                              }`}>
-                                {t("Hiss olunan", "Detected")}: {msg.detectedEmotion}
-                              </div>
-                            )}
+                          {msg.role === 'model' && (
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mb-1 ${theme === 'dark' ? 'bg-yellow-400/20 text-yellow-500' : 'bg-yellow-400/10 text-yellow-600'}`}>
+                              <Sparkles size={14} />
+                            </div>
+                          )}
+                          <div className={`max-w-[85%] space-y-3`}>
+                            <div className={`p-4 text-xs font-bold leading-relaxed shadow-sm ${
+                              msg.role === 'user' 
+                                ? theme === 'dark' ? 'bg-white/10 text-white rounded-3xl rounded-tr-sm' : 'bg-[#E9ECEF] text-navy rounded-3xl rounded-tr-sm' 
+                                : activeChatPsych === '4' && idx === chatMessages.length - 1 && msg.content.includes("tələbə yoldaşın")
+                                  ? 'bg-[#FFD95A] text-navy rounded-3xl rounded-tl-sm'
+                                  : theme === 'dark' ? 'bg-[#1A1D23] text-white rounded-3xl rounded-tl-sm border border-white/5' : 'bg-white text-navy rounded-3xl rounded-tl-sm'
+                            }`}>
+                              {msg.content}
+                              
+                              {/* Specialty Options - Only show in initial model message if it's generic AI helper */}
+                              {msg.role === 'model' && idx === 0 && !activeChatPsych && (
+                                <div className="mt-4 space-y-2">
+                                  {PSYCHOLOGISTS.map(p => (
+                                    <button
+                                      key={p.id}
+                                      onClick={() => startChat(p.id)}
+                                      className={`w-full flex items-center gap-3 p-2 pr-4 rounded-full transition-all active:scale-95 text-left border ${
+                                        theme === 'dark' ? 'border-white/5 hover:border-white/10' : 'border-black/5 hover:border-black/10'
+                                      } ${
+                                        p.id === '2' ? 'bg-blue-100/10 text-blue-400' : 
+                                        p.id === '3' ? 'bg-emerald-100/10 text-emerald-400' :
+                                        'bg-yellow-100/10 text-yellow-400'
+                                      }`}
+                                    >
+                                      <img src={p.avatar} className="w-8 h-8 rounded-full object-cover border-2 border-white shadow-sm" referrerPolicy="no-referrer" />
+                                      <span className="text-[10px] font-black">{lang === 'az' ? `${p.specialtyAz} (${p.shortNameAz})` : `${p.specialtyEn} (${p.shortNameEn})`}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+
+                              {msg.detectedEmotion && (
+                                <div className={`mt-2 pt-2 border-t text-[8px] font-black uppercase tracking-widest ${
+                                  msg.detectedEmotion === 'crisis' 
+                                    ? 'text-red-500 border-red-500/10 animate-pulse' 
+                                    : theme === 'dark' ? 'border-white/5 opacity-50' : 'border-black/5 opacity-50'
+                                }`}>
+                                  {t("Hiss olunan", "Detected")}: {msg.detectedEmotion}
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </motion.div>
                       ))}
                       {isTyping && (
-                        <div className="flex justify-start">
-                          <div className={`p-3 px-4 rounded-3xl ${theme === 'dark' ? 'bg-white/5' : 'bg-navy/5'} flex items-center gap-2 border border-white/5`}>
-                            <span className="text-[9px] font-black opacity-40 uppercase tracking-widest">{t("Yazır...", "Typing...")}</span>
+                        <div className="flex justify-start items-center gap-2">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${theme === 'dark' ? 'bg-yellow-400/20 text-yellow-500' : 'bg-yellow-400/10 text-yellow-600'}`}>
+                            <Sparkles size={14} />
+                          </div>
+                          <div className={`p-4 px-6 rounded-3xl flex items-center gap-2 shadow-sm ${theme === 'dark' ? 'bg-[#1A1D23] border border-white/5' : 'bg-white'}`}>
                             <div className="flex gap-1">
-                              <div className="w-1 h-1 bg-teal-brand rounded-full animate-bounce" style={{ animationDelay: '0s' }} />
-                              <div className="w-1 h-1 bg-teal-brand rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
-                              <div className="w-1 h-1 bg-teal-brand rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
+                              <div className="w-1.5 h-1.5 bg-yellow-400 rounded-full animate-bounce" style={{ animationDelay: '0s' }} />
+                              <div className="w-1.5 h-1.5 bg-yellow-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+                              <div className="w-1.5 h-1.5 bg-yellow-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
                             </div>
                           </div>
                         </div>
@@ -2944,28 +3784,34 @@ export default function App() {
                     </div>
 
                     {/* Chat Input */}
-                    <form onSubmit={handleSendMessage} className="p-4 pb-8 border-t border-navy/5 dark:border-white/5">
-                      <div className="relative">
+                    <form onSubmit={handleSendMessage} className={`p-4 pb-8 border-t flex items-center gap-2 ${theme === 'dark' ? 'bg-[#0A0C10] border-white/5' : 'bg-white border-gray-100'}`}>
+                       <button 
+                          type="button"
+                          className={`w-10 h-10 rounded-full flex items-center justify-center active:scale-95 transition-transform ${theme === 'dark' ? 'bg-white/5 text-gray-500' : 'bg-gray-50 text-gray-400'}`}
+                       >
+                          <Mic size={18} />
+                       </button>
+                      <div className="relative flex-1">
                         <input 
                           type="text" 
                           value={inputText}
                           onChange={(e) => setInputText(e.target.value)}
                           placeholder={t("Mesaj yazın...", "Type a message...")}
-                          className={`w-full py-3 pr-12 pl-4 rounded-xl text-xs font-bold outline-none glass ${theme === 'dark' ? 'glass-dark bg-white/5 focus:bg-white/10' : 'glass-light bg-navy/5 focus:bg-white border border-navy/5'}`}
+                          className={`w-full py-3.5 pr-12 pl-5 rounded-full text-xs font-bold outline-none transition-all ${theme === 'dark' ? 'bg-white/5 border-white/10 text-white focus:bg-white/10 focus:border-yellow-400' : 'bg-gray-50 border border-gray-100 focus:bg-white focus:border-yellow-400'}`}
                         />
                         <button 
                           type="submit"
                           disabled={!inputText.trim() || isTyping}
-                          className={`absolute right-1 top-1 w-10 h-10 rounded-lg flex items-center justify-center transition-all ${inputText.trim() ? 'bg-teal-brand text-navy shadow-lg' : 'bg-white/5 text-white/20'}`}
+                          className={`absolute right-1 top-1 w-10 h-10 rounded-full flex items-center justify-center transition-all ${inputText.trim() ? 'bg-yellow-400 text-navy shadow-lg' : theme === 'dark' ? 'bg-white/5 text-gray-600' : 'bg-gray-100 text-gray-300'}`}
                         >
                           <Send size={16} />
                         </button>
                       </div>
                     </form>
-                      </motion.div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                  </motion.div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
                 {/* BOOKING MODAL */}
                 <AnimatePresence>
@@ -3050,29 +3896,44 @@ export default function App() {
 
                 {/* Emergency Modal */}
                 <AnimatePresence>
+                  {!isProfileComplete && !profileLoading && user && (isEmailVerified || isAnonymousUser) && (
+                    <OnboardingOverlay 
+                      lang={lang} 
+                      onComplete={handleOnboardingComplete} 
+                    />
+                  )}
                   {isEmergencyModalOpen && (
                     <motion.div 
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
-                      className="absolute inset-0 z-[150] flex items-center justify-center p-6 bg-red-600"
+                      className="absolute inset-0 z-[150] flex items-center justify-center p-6 bg-[#0D1117]"
                     >
-                      <div className="w-full space-y-8 text-white text-center">
+                      <div className="absolute inset-0 opacity-20">
+                         <img 
+                            src="https://images.unsplash.com/photo-1527137342181-19aab11a8ee1?auto=format&fit=crop&q=80&w=1200" 
+                            className="w-full h-full object-cover grayscale" 
+                            referrerPolicy="no-referrer"
+                         />
+                         <div className="absolute inset-0 bg-gradient-to-t from-[#0D1117] via-[#0D1117]/80 to-transparent" />
+                      </div>
+
+                      <div className="w-full space-y-8 text-white text-center relative z-10">
                         <motion.div 
                           initial={{ scale: 0.5, opacity: 0 }}
                           animate={{ scale: 1, opacity: 1 }}
                           className="flex flex-col items-center gap-4"
                         >
-                          <div className="w-20 h-20 rounded-full bg-white flex items-center justify-center shadow-2xl shadow-white/20">
-                            <AlertCircle size={40} className="text-red-600" />
+                          <div className="w-24 h-24 rounded-full bg-red-500 flex items-center justify-center shadow-2xl shadow-red-500/20 mb-2">
+                            <ShieldAlert size={48} className="text-white" />
                           </div>
-                          <h2 className="text-3xl font-black">{t("SƏN TƏK DEYİLSƏN", "YOU ARE NOT ALONE")}</h2>
-                          <p className="text-sm font-bold opacity-90 max-w-xs">{t("Hər bir çətinliyin həlli var. Bizimlə əlaqə saxla, sənə kömək edək.", "Every difficulty has a solution. Contact us, let us help you.")}</p>
+                          <h2 className="text-3xl font-black tracking-tighter">{t("SƏN TƏK DEYİLSƏN", "YOU ARE NOT ALONE")}</h2>
+                          <p className="text-sm font-bold opacity-80 max-w-xs mx-auto leading-relaxed">{t("Hər bir çətinliyin həlli var. Bizimlə əlaqə saxla, sənə kömək edək.", "Every difficulty has a solution. Contact us, let us help you.")}</p>
                         </motion.div>
 
-                        <div className="grid grid-cols-1 gap-3">
+                        <div className="grid grid-cols-1 gap-3 max-w-xs mx-auto">
                           {[
-                            { label: "Psixoloji yardım (988)", phone: "988", icon: ShieldAlert },
+                            { label: "Psixoloji yardım (988)", phone: "988", icon: AlertTriangle },
                             { label: "Psixoloji dəstək (012) 510-66-36", phone: "0125106636", icon: Phone },
                             { label: "Polis (102)", phone: "102", icon: Phone },
                             { label: "Təcili tibbi yardım (103)", phone: "103", icon: Phone }
@@ -3083,9 +3944,9 @@ export default function App() {
                               initial={{ x: -20, opacity: 0 }}
                               animate={{ x: 0, opacity: 1 }}
                               transition={{ delay: idx * 0.1 }}
-                              className="w-full bg-white text-red-600 py-4 rounded-2xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-3 active:scale-95 transition-transform"
+                              className="w-full bg-white/10 hover:bg-white/20 border border-white/10 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-3 active:scale-95 transition-all backdrop-blur-md"
                             >
-                              <item.icon size={16} />
+                              <item.icon size={16} className="text-teal-brand" />
                               {item.label}
                             </motion.a>
                           ))}
@@ -3094,14 +3955,14 @@ export default function App() {
                         <div className="space-y-4">
                           <motion.button
                             whileTap={{ scale: 0.95 }}
-                            className="w-full bg-white/20 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest"
+                            className="w-full max-w-xs mx-auto bg-teal-brand text-navy py-4 rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-teal-brand/20"
                           >
                             {t("Yaxın birinə zəng et", "Call a loved one")}
                           </motion.button>
                           
                           <button 
                             onClick={() => setIsEmergencyModalOpen(false)}
-                            className="text-[10px] font-black uppercase tracking-[0.4em] opacity-60"
+                            className="text-[10px] font-black uppercase tracking-[0.4em] opacity-40 hover:opacity-100 transition-opacity"
                           >
                             {t("GERİ QAYIT", "GO BACK")}
                           </button>

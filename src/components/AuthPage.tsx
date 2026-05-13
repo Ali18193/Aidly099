@@ -191,7 +191,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({
         <div className="flex flex-col items-center gap-4">
           {authMode === 'login' ? (
             <>
-              <button onClick={() => setAuthMode('forgot')} className="text-[10px] font-bold opacity-40 hover:opacity-100 transition-opacity">
+              <button 
+                onClick={() => setAuthMode('forgot')} 
+                className="text-xs font-bold text-teal-brand/70 hover:text-teal-brand transition-colors"
+              >
                 {t("Şifrənizi unutmusunuz?", "Forgot your password?")}
               </button>
               <div className="flex items-center gap-2 text-[10px] font-bold">

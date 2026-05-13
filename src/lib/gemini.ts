@@ -4,10 +4,10 @@ const getApiKey = () => {
   return process.env.GEMINI_API_KEY || (import.meta as any).env?.VITE_GEMINI_API_KEY || "";
 };
 
-const apiKey = process.env.GEMINI_API_KEY;
-const ai = new GoogleGenAI({ apiKey: apiKey || "" });
+const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
 function handleGeminiError(error: any, lang: 'az' | 'en'): string {
+  const apiKey = getApiKey();
   const errMessage = error?.message?.toLowerCase() || "";
   
   if (errMessage.includes("safety")) {
@@ -40,23 +40,23 @@ function handleGeminiError(error: any, lang: 'az' | 'en'): string {
 }
 
 export async function getAIAdvice(score: number, lang: 'az' | 'en') {
+  const apiKey = getApiKey();
   if (!apiKey) return lang === 'az' ? "Dəstək üçün minnətdarıq. Zəhmət olmasa API açarını yoxlayın." : "Thank you for your support. Please check the API key.";
 
   try {
-    const systemInstruction = lang === 'az'
+    const si = lang === 'az'
       ? "Sən 'Aidly' tətbiqində çalışan səmimi bir AI-san. İstifdəçiyə testi üçün qısa, isti və ürəkdən gələn cümlələrlə dəstək olmalısan. MÜTLƏQ AZƏRBAYCAN DİLİNDƏ CAVAB VER."
       : "You are a warm AI in the 'Aidly' app. Support the user for their test result with short, heartfelt sentences. ALWAYS RESPOND IN ENGLISH.";
 
     const prompt = lang === 'az' 
-      ? `İstifadəçi psixoloji testdən 100 üzərindən ${score} bal topladı. Bu nəticəyə uyğun olaraq, çox səmimi, sanki yaxın bir dostu ilə danışırmış kimi isti və ürəkdən gələn bir dəstək mesajı yaz. Maksimum 2 cümlə.`
+      ? `İstifadəçi psixoloji testdən 100 üzərinden ${score} bal topladı. Bu nəticəyə uyğun olaraq, çox səmimi, sanki yaxın bir dostu ilə danışırmış kimi isti və ürəkdən gələn bir dəstək mesajı yaz. Maksimum 2 cümlə.`
       : `The user scored ${score} out of 100 on a psychological test. Write a very sincere, warm, and heartfelt support message, as if talking to a close friend. Maximum 2 sentences.`;
 
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: [{ parts: [{ text: prompt }] }],
+      contents: prompt,
       config: {
-        systemInstruction,
-        maxOutputTokens: 1024,
+        systemInstruction: si,
       }
     });
 
@@ -74,8 +74,10 @@ export async function getAICounselingStream(
   specialty: string = "", 
   name: string = "",
   sensitivity: 'Low' | 'Medium' | 'High' = 'Medium',
-  onChunk: (chunk: string) => void
+  onChunk: (chunk: string) => void,
+  userProfile?: { name: string, age: string, gender: string, healthStatus: string } | null
 ) {
+  const apiKey = getApiKey();
   if (!apiKey) {
     onChunk(lang === 'az' ? "API açarı tapılmadı." : "API key not found.");
     return;
@@ -85,12 +87,29 @@ export async function getAICounselingStream(
     const specialtyMsg = specialty ? `Specialty: ${specialty}. ` : "";
     const nameMsg = name ? `User's name: ${name}. ` : "";
     
-    const systemInstruction = `You are Aidly, a compassionate AI mental wellness assistant designed for Azerbaijani users.
+    // Psychologist Persona Handling
+    const psych = {
+      name: name || "Counselor",
+      specialty: specialty || "Mental Wellness",
+      gender: userProfile?.gender === 'female' ? 'female' : 'male' // Default or based on passed info
+    };
+
+    let profileMsg = "";
+    if (userProfile) {
+      profileMsg = `User context: Age ${userProfile.age}, Gender ${userProfile.gender}, Health condition: ${userProfile.healthStatus}. Name: ${userProfile.name}. Do not ask for this info again, but use it to tailor your responses. If they mention risky health symptoms (like self-harm), prioritize crisis protocol. `;
+    }
+    
+    const si = `You are Aidly, a compassionate AI mental wellness assistant named ${specialty ? specialty : 'Assistant'}.
 
 CORE IDENTITY:
 - You are a warm, empathetic listener — not an advice machine.
+- Your persona name is defined by the 'name' and 'specialty' provided.
+- If you are Günel or Aydan, you are a female counselor (Xanım). If you are Samir, you are a male counselor (Bəy).
 - You are NOT a licensed psychologist and never diagnose.
 - You are NOT a replacement for professional help.
+
+GREETING:
+- If this is the start of the conversation, introduce yourself clearly: "Salam, Sizin Ai məsləhətçiniz olan [Name] [Title]-dır. Sizi dinləyirəm."
 
 CONVERSATION RULES (MOST IMPORTANT):
 1. When user expresses negative feelings, ALWAYS ask one gentle follow-up question first.
@@ -102,41 +121,29 @@ CONVERSATION RULES (MOST IMPORTANT):
 7. Always respond in the user's language (Azerbaijani, Russian, or English).
 8. Keep responses short and conversational — this is a mobile chat.
 9. Suggest professional help only after building rapport and understanding the situation. Never as a first response. Frame it gently.
-10. ${nameMsg}${specialtyMsg}
+10. Name: ${name}. Specialty: ${specialty}. ${profileMsg}
 
 CRISIS PROTOCOL:
 - If user shows clear signs of self-harm or suicidal thoughts, compassionately acknowledge their pain first, then provide emergency contacts.
 - Emergency contacts Azerbaijan:
   - Psixiatriya yardım: 012 404 27 27
-  - Sakinlərin müraciət xətti: 195
   - Təcili yardım: 103, Polis: 102, FHN: 112.
 
-EXAMPLE BEHAVIOR:
-User: "Özümü pis hiss edirəm"
-RIGHT ✅: "Bunu eşitmək üzücüdür... Bu gün nə baş verdi?"
-
-User: "Çox yorğunam, həyatdan bezmişəm"
-RIGHT ✅: "Uzun müddətdir belə hiss edirsən, yoxsa bu yaxınlarda başladı?"
-
 EMOTION TAG:
-You MUST end every single response with an emotion tag in the language of the conversation: [EMOTION: sad/stressed/happy/scared/crisis/normal] (translated appropriately).`;
+You MUST end every single response with the EXACT emotion tag (do NOT translate the word EMOTION): [EMOTION: sad/stressed/happy/scared/crisis/normal]`;
 
-    const contents = [
-      ...history.map(h => ({ role: h.role === 'user' ? 'user' : 'model', parts: [{ text: h.content }] })),
-      { role: 'user', parts: [{ text: message }] }
-    ];
+    const chatHistory = history.map(h => ({ role: h.role, parts: [{ text: h.content }] }));
 
-    const result = await ai.models.generateContentStream({
+    const response = await ai.models.generateContentStream({
       model: "gemini-3-flash-preview",
-      contents,
+      contents: [...chatHistory, { role: 'user', parts: [{ text: message }] }],
       config: {
-        systemInstruction,
-        maxOutputTokens: 2048,
+        systemInstruction: si,
         temperature: 0.7,
       }
     });
 
-    for await (const chunk of result) {
+    for await (const chunk of response) {
       const text = chunk.text;
       if (text) onChunk(text);
     }
@@ -154,13 +161,14 @@ export async function getAICounseling(
   name: string = "",
   sensitivity: 'Low' | 'Medium' | 'High' = 'Medium'
 ) {
+  const apiKey = getApiKey();
   if (!apiKey) return { text: lang === 'az' ? "API açarı tapılmadı." : "API key not found." };
 
   try {
     const specialtyMsg = specialty ? `Specialty: ${specialty}. ` : "";
     const nameMsg = name ? `User's name: ${name}. ` : "";
     
-    const systemInstruction = `You are Aidly, a compassionate AI mental wellness assistant designed for Azerbaijani users.
+    const si = `You are Aidly, a compassionate AI mental wellness assistant designed for Azerbaijani users.
 
 CORE IDENTITY:
 - You are a warm, empathetic listener — not an advice machine.
@@ -183,30 +191,18 @@ CRISIS PROTOCOL:
 - If user shows clear signs of self-harm or suicidal thoughts, compassionately acknowledge their pain first, then provide emergency contacts.
 - Emergency contacts Azerbaijan:
   - Psixiatriya yardım: 012 404 27 27
-  - Sakinlərin müraciət xətti: 195
   - Təcili yardım: 103, Polis: 102, FHN: 112.
 
-EXAMPLE BEHAVIOR:
-User: "Özümü pis hiss edirəm"
-RIGHT ✅: "Bunu eşitmək üzücüdür... Bu gün nə baş verdi?"
-
-User: "Çox yorğunam, həyatdan bezmişəm"
-RIGHT ✅: "Uzun müddətdir belə hiss edirsən, yoxsa bu yaxınlarda başladı?"
-
 EMOTION TAG:
-You MUST end every single response with an emotion tag in the language of the conversation: [EMOTION: sad/stressed/happy/scared/crisis/normal] (translated appropriately).`;
+You MUST end every single response with the EXACT emotion tag (do NOT translate the word EMOTION): [EMOTION: sad/stressed/happy/scared/crisis/normal]`;
 
-    const contents = [
-      ...history.map(h => ({ role: h.role === 'user' ? 'user' : 'model', parts: [{ text: h.content }] })),
-      { role: 'user', parts: [{ text: message }] }
-    ];
+    const chatHistory = history.map(h => ({ role: h.role, parts: [{ text: h.content }] }));
 
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
-      contents,
+      model: "gemini-3-flash-preview",
+      contents: [...chatHistory, { role: 'user', parts: [{ text: message }] }],
       config: {
-        systemInstruction,
-        maxOutputTokens: 2048,
+        systemInstruction: si,
         temperature: 0.7,
       }
     });
