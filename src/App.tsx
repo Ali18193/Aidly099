@@ -80,6 +80,48 @@ import { doc, getDoc, setDoc, getDocFromServer, collection, query, orderBy, limi
 
 import { OnboardingOverlay } from './components/OnboardingOverlay';
 
+import { 
+  PSYCHOLOGISTS, 
+  REAL_PSYCHOLOGISTS, 
+  EMERGENCY_SERVICES, 
+  ARTICLES, 
+  QUESTIONS, 
+  SERVICES_DATA, 
+  AUDIO_RESOURCES, 
+  QUOTES 
+} from "./constants";
+
+import { HomeView } from "./components/views/HomeView";
+import { TasksView } from "./components/views/TasksView";
+import { SettingsView } from "./components/views/SettingsView";
+import { SocialServicesView } from "./components/views/SocialServicesView";
+import { ResourcesView } from "./components/views/ResourcesView";
+import { ChatView } from "./components/views/ChatView";
+import { SessionsView } from "./components/views/SessionsView";
+import { TestView } from "./components/views/TestView";
+import { ResultsView } from "./components/views/ResultsView";
+import { FeedbackView } from "./components/views/FeedbackView";
+import { PastChatsView } from "./components/views/PastChatsView";
+import { Logo } from "./components/Logo";
+
+import {
+  UserProfile,
+  ChatSession,
+  ChatMessage,
+  MoodLog,
+  Task,
+  TestResult,
+  SocialService,
+  Article,
+  EmergencyService,
+  Psychologist,
+  AudioResource,
+  Booking,
+  Session,
+  Message,
+  PastChatSession
+} from "./types";
+
 // Firestore Error Types
 enum OperationType {
   CREATE = 'create',
